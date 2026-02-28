@@ -30,18 +30,15 @@ class SmsService {
       }
     }
 
-    // 1. Sync Pending SMS from Native Layer (Offline SMS)
-    _syncPendingSms();
+    // 1 & 1.5. Sync offline SMS (pending & categorized)
+    syncOfflineSms();
 
-    // 2. Listen for Real-time SMS (Foreground)
-    _eventChannel.receiveBroadcastStream().listen((dynamic event) {
-      print("SMS Received: $event");
-      final Map<dynamic, dynamic> data = event;
-      _processForegroundMessage(data['body'] as String?, data['sender'] as String?);
-    }, onError: (dynamic error) {
-      print('Received error: ${error.message}');
-    });
-    print("SMS Listener Initialized");
+    print("SMS Listener Initialized (On Resume/Start Only)");
+  }
+
+  Future<void> syncOfflineSms() async {
+    await _syncPendingSms();
+    await _syncCategorizedSms();
   }
 
   Future<void> _syncPendingSms() async {
@@ -65,6 +62,11 @@ class SmsService {
 
       if (expensesToSync.isNotEmpty) {
         await _sendPendingToBackend(expensesToSync);
+      }
+      
+      // Clear pending list after successfully parsing & transmitting
+      if (smsList.isNotEmpty) {
+        await _methodChannel.invokeMethod('clearPendingSms');
         if (onRefresh != null) onRefresh!();
       }
     } catch (e) {
@@ -85,9 +87,61 @@ class SmsService {
     }
   }
 
+  Future<void> _syncCategorizedSms() async {
+    try {
+      final String? jsonString = await _methodChannel.invokeMethod('getCategorizedSms');
+      if (jsonString == null || jsonString == "[]") return;
+
+      print("DEBUG: Categorized SMS JSON: $jsonString");
+      List<dynamic> smsList = jsonDecode(jsonString);
+      
+      for (var sms in smsList) {
+        String body = sms['body'] ?? "";
+        String sender = sms['sender'] ?? "";
+        String userCategory = sms['category'] ?? "Uncategorized";
+        
+        // Parse to get amount and date using normal logic
+        var parsed = parseSms(body, sender, injectCategory: userCategory);
+        if (parsed != null) {
+          // Push directly as confirmed expense
+          await _sendConfirmedToBackend(parsed, userCategory);
+        }
+      }
+      
+      // CRITICAL: We MUST clear the categorized list after pushing them to backend
+      if (smsList.isNotEmpty) {
+        await _methodChannel.invokeMethod('clearCategorizedSms');
+        if (onRefresh != null) onRefresh!();
+      }
+    } catch (e) {
+      print("Error syncing categorized SMS: $e");
+    }
+  }
+
+  Future<void> _sendConfirmedToBackend(Map<String, dynamic> parsedSms, String category) async {
+    try {
+      final response = await http.post(
+        Uri.parse("${Constants.baseUrl}/expenses"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "amount": parsedSms['amount'],
+          "date": parsedSms['date'],
+          "time": parsedSms['time'],
+          "category": category,
+          "type": parsedSms['type'],
+          "status": "confirmed", // Since user categorized it via notification
+          "entry_method": "sms"
+        }),
+      );
+      print("Sync Categorized Response: ${response.statusCode} ${response.body}");
+    } catch (e) {
+      print("Backend Categorized Sync Error: $e");
+    }
+  }
+
   // Helper Key Logic for Parsing
   // Made public and static for testing
-  static Map<String, dynamic>? parseSms(String body, String sender) {
+  static Map<String, dynamic>? parseSms(String body, String sender, {String? injectCategory}) {
     // ========== SENDER CHECK ==========
     RegExp senderPattern = RegExp(r'^[A-Z]{2}-[A-Z0-9]{5,12}(-[A-Z])?$');
     if (!senderPattern.hasMatch(sender.toUpperCase())) {
@@ -192,39 +246,10 @@ class SmsService {
       "amount": amount,
       "date": finalDateStr,
       "time": time, 
-      "category": "Uncategorized", // Default since we removed merchant extraction
+      "category": injectCategory ?? "Uncategorized", // Use injected category if available
       "type": type,
     };
   }
 
-  void _processForegroundMessage(String? body, String? sender) async {
-    if (body == null || sender == null) return;
-    print("Processing Foreground SMS: $body from $sender");
-    
-    var parsed = parseSms(body, sender);
-    if (parsed == null) return;
-
-    if ((parsed['amount'] as double) > 0) {
-      final bool? saved = await showDialog(
-        context: context,
-        builder: (context) => SMSConfirmationDialog(
-          amount: parsed['amount'],
-          date: parsed['date'],
-          time: parsed['time'], 
-          type: parsed['type'],
-          userId: userId,
-        ),
-      );
-      
-      // IMPORTANT: Clear the native preference regardless of Save/Cancel
-      // The SmsReceiver saves to preference for persistence, but since we 
-      // just handled it in the foreground, we MUST clear it so it's not 
-      // processed again as a "pending" SMS later.
-      await _methodChannel.invokeMethod('getPendingSms');
-
-      if (saved == true && onRefresh != null) {
-        onRefresh!();
-      }
-    }
-  }
+  // _processForegroundMessage removed since we rely purely on Android notifications now.
 }

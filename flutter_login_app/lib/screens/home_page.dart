@@ -19,17 +19,34 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _currentIndex = 0;
   double balance = 0.0;
   bool isLoading = true;
   final String baseUrl = Constants.baseUrl;
+  late SmsService _smsService;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     fetchBalance();
-    SmsService(context, widget.userId, onRefresh: fetchBalance).initListener();
+    _smsService = SmsService(context, widget.userId, onRefresh: fetchBalance);
+    _smsService.initListener();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _smsService.syncOfflineSms();
+      fetchBalance();
+    }
   }
 
   Future<void> fetchBalance() async {

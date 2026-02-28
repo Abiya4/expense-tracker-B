@@ -18,6 +18,10 @@ class SmsReceiver : BroadcastReceiver() {
     private val PREFS_NAME = "FlutterSharedPreferences" // Default Flutter Prefs
     private val PREFS_KEY = "flutter.pending_sms" // Key accessible from Flutter (with prefix)
 
+    companion object {
+        const val REPLY_INPUT_KEY = "category_reply"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
             val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
@@ -31,10 +35,7 @@ class SmsReceiver : BroadcastReceiver() {
                     saveSmsLocally(context, sender, body, timestamp)
 
                     // 2. Show Notification
-                    showNotification(context, body)
-
-                    // 3. Try sending to Flutter (if running)
-                    MainActivity.sendSms(sender, body)
+                    showNotification(context, sender, body, timestamp)
                 }
             }
         }
@@ -123,7 +124,7 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun showNotification(context: Context, body: String?) {
+    private fun showNotification(context: Context, sender: String?, body: String?, timestamp: Long) {
         val channelId = "expense_tracker_sms"
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -132,9 +133,83 @@ class SmsReceiver : BroadcastReceiver() {
             notificationManager.createNotificationChannel(channel)
         }
 
+        // Notification ID based on timestamp
+        val notificationId = (timestamp % Int.MAX_VALUE).toInt()
+
         // Intent to open app
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         val pendingIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+        // Determine if Income or Expense (Heuristics for recent category)
+        val isIncome = body?.lowercase()?.let { it.contains("credited") || it.contains("received") } ?: false
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val recentCategory = if (isIncome) {
+            prefs.getString("flutter.recent_income_category", "Salary") ?: "Salary"
+        } else {
+            prefs.getString("flutter.recent_expense_category", "Food") ?: "Food"
+        }
+
+        // 1. Cancel Action
+        val cancelIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_CANCEL_EXPENSE
+            putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            putExtra(NotificationActionReceiver.EXTRA_TIMESTAMP, timestamp)
+        }
+        val cancelPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId * 10, // unique request code
+            cancelIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val cancelAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_delete,
+            "Cancel",
+            cancelPendingIntent
+        ).build()
+
+        // 2. Recent Category Action (Instant Save)
+        val recentIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_CATEGORY_RECENT
+            putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            putExtra(NotificationActionReceiver.EXTRA_SENDER, sender)
+            putExtra(NotificationActionReceiver.EXTRA_BODY, body)
+            putExtra(NotificationActionReceiver.EXTRA_TIMESTAMP, timestamp)
+            putExtra(NotificationActionReceiver.EXTRA_RECENT_CATEGORY, recentCategory)
+        }
+        val recentPendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId * 10 + 1, // unique request code
+            recentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val recentAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_save,
+            recentCategory,
+            recentPendingIntent
+        ).build()
+
+        // 3. Other Action (Direct Reply)
+        val categorizeIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_CATEGORY_SUBMIT
+            putExtra(NotificationActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
+            putExtra(NotificationActionReceiver.EXTRA_SENDER, sender)
+            putExtra(NotificationActionReceiver.EXTRA_BODY, body)
+            putExtra(NotificationActionReceiver.EXTRA_TIMESTAMP, timestamp)
+        }
+        val categorizePendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId * 10 + 2, // distinct request code
+            categorizeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE // MUST BE MUTABLE FOR REMOTE INPUT
+        )
+        val remoteInput = androidx.core.app.RemoteInput.Builder(REPLY_INPUT_KEY)
+            .setLabel("Type category")
+            .build()
+        val categorizeAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_input_add,
+            "Other",
+            categorizePendingIntent
+        ).addRemoteInput(remoteInput).build()
 
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.sym_action_chat) // Default icon, replace if available
@@ -143,9 +218,12 @@ class SmsReceiver : BroadcastReceiver() {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
+            .addAction(recentAction)
+            .addAction(categorizeAction)
+            .addAction(cancelAction)
             .setAutoCancel(true)
             .build()
 
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        notificationManager.notify(notificationId, notification)
     }
 }

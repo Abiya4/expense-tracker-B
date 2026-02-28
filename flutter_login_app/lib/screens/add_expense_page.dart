@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../utils/constants.dart';
@@ -261,6 +262,17 @@ class _AddExpensePageState extends State<AddExpensePage> {
     );
 
     if (response.statusCode == 201) {
+      // ---> NEW: Save to native Android for the Recent notification button <---
+      try {
+        const platform = MethodChannel('com.example.flutter_login_app/sms_methods');
+        await platform.invokeMethod('setRecentCategory', {
+          'type': selectedType,
+          'category': selectedCategory,
+        });
+      } catch (e) {
+        print("Failed to save recent category: $e");
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(

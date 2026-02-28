@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:flutter/services.dart';
 
 
 import '../utils/constants.dart';
@@ -70,6 +71,17 @@ class _SMSConfirmationDialogState extends State<SMSConfirmationDialog> {
       print("DEBUG: SMS Conf Response: ${response.statusCode} - ${response.body}");
 
       if (response.statusCode == 201) {
+        // ---> NEW: Save to native Android for the Recent notification button <---
+        try {
+          const platform = MethodChannel('com.example.flutter_login_app/sms_methods');
+          await platform.invokeMethod('setRecentCategory', {
+            'type': widget.type,
+            'category': _selectedCategory,
+          });
+        } catch (e) {
+          print("Failed to save recent category: $e");
+        }
+
         final respData = jsonDecode(response.body);
         Navigator.pop(context, true); // Return true on success
         if (respData['message'] != null && respData['alert'] != null) {

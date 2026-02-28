@@ -12,7 +12,7 @@ class ViewExpensesPage extends StatefulWidget {
   State<ViewExpensesPage> createState() => _ViewExpensesPageState();
 }
 
-class _ViewExpensesPageState extends State<ViewExpensesPage> {
+class _ViewExpensesPageState extends State<ViewExpensesPage> with WidgetsBindingObserver {
   List<dynamic> pendingTransactions = [];
   List<dynamic> confirmedTransactions = [];
   bool isLoading = true;
@@ -21,7 +21,24 @@ class _ViewExpensesPageState extends State<ViewExpensesPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     fetchTransactions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Give the system 1 second to perform cross-component SMS syncing before refreshing UI.
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted) fetchTransactions();
+      });
+    }
   }
 
   Future<void> fetchTransactions() async {
