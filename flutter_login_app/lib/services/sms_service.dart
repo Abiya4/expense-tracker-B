@@ -55,8 +55,9 @@ class SmsService {
 
       for (var sms in smsList) {
         String body = sms['body'] ?? "";
+        String sender = sms['sender'] ?? "";
         // Parse using the same logic
-        var parsed = parseSms(body);
+        var parsed = parseSms(body, sender);
         if (parsed != null) {
           expensesToSync.add(parsed);
         }
@@ -86,7 +87,14 @@ class SmsService {
 
   // Helper Key Logic for Parsing
   // Made public and static for testing
-  static Map<String, dynamic>? parseSms(String body) {
+  static Map<String, dynamic>? parseSms(String body, String sender) {
+    // ========== SENDER CHECK ==========
+    RegExp senderPattern = RegExp(r'^[A-Z]{2}-[A-Z0-9]{5,12}(-[A-Z])?$');
+    if (!senderPattern.hasMatch(sender.toUpperCase())) {
+      print('❌ SMS REJECTED: Sender ($sender) does not match bank pattern');
+      return null;
+    }
+
     // ========== ONLY CHECK: MASKED ACCOUNT AND NO LINKS ==========
     // HAM = Has masked account like X1234, XX1234, XXX5678 (uppercase X + digits)
     // OR "sent to" + 12-digit reference number
@@ -190,10 +198,10 @@ class SmsService {
   }
 
   void _processForegroundMessage(String? body, String? sender) async {
-    if (body == null) return;
-    print("Processing Foreground SMS: $body");
+    if (body == null || sender == null) return;
+    print("Processing Foreground SMS: $body from $sender");
     
-    var parsed = parseSms(body);
+    var parsed = parseSms(body, sender);
     if (parsed == null) return;
 
     if ((parsed['amount'] as double) > 0) {

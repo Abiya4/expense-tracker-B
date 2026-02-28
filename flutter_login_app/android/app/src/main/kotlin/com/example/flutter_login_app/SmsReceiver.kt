@@ -26,7 +26,7 @@ class SmsReceiver : BroadcastReceiver() {
                 val body = message.messageBody
                 val timestamp = message.timestampMillis
 
-                if (isExpenseSms(body)) {
+                if (isExpenseSms(sender, body)) {
                     // 1. Save to SharedPreferences for persistence
                     saveSmsLocally(context, sender, body, timestamp)
 
@@ -40,15 +40,23 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun isExpenseSms(body: String?): Boolean {
-        if (body == null || body.isBlank()) {
-            android.util.Log.d("SMS_FILTER", "REJECTED: Body is null or blank")
+    private fun isExpenseSms(sender: String?, body: String?): Boolean {
+        if (body == null || body.isBlank() || sender == null || sender.isBlank()) {
+            android.util.Log.d("SMS_FILTER", "REJECTED: Body or Sender is null/blank")
             return false
         }
         
         android.util.Log.d("SMS_FILTER", "========== ANALYZING SMS ==========")
         val lowerBody = body.lowercase()
+        android.util.Log.d("SMS_FILTER", "Sender: $sender")
         android.util.Log.d("SMS_FILTER", "Body: $body")
+        
+        // Validate Sender Address Pattern
+        val senderPattern = Regex("^[A-Z]{2}-[A-Z0-9]{5,12}(-[A-Z])?$")
+        if (!senderPattern.matches(sender.uppercase())) {
+            android.util.Log.d("SMS_FILTER", "REJECTED: Sender does not match bank pattern")
+            return false
+        }
         
         // ========== ONLY CHECK: MASKED ACCOUNT AND NO LINKS ==========
         // HAM = Has masked account like X1234, XX1234, XXX5678 (uppercase X + digits)
