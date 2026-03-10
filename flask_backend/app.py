@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, date as date_type
 from decimal import Decimal
 import re
 import os
-
+import traceback
 
 app = Flask(__name__)
 CORS(app)
@@ -37,9 +37,9 @@ def run_migrations():
     print("Checking for database migrations...")
     cur = get_cursor()
     try:
+        # ── expenses.status ──────────────────────────────────────
         cur.execute("SHOW COLUMNS FROM expenses LIKE 'status'")
-        result = cur.fetchone()
-        if not result:
+        if not cur.fetchone():
             print("Adding 'status' column to expenses table...")
             cur.execute("ALTER TABLE expenses ADD COLUMN status VARCHAR(20) DEFAULT 'confirmed'")
             mysql_conn.commit()
@@ -47,34 +47,61 @@ def run_migrations():
         else:
             print("Migration check: 'status' column already exists.")
 
+        # ── expenses.entry_method ────────────────────────────────
         cur.execute("SHOW COLUMNS FROM expenses LIKE 'entry_method'")
-        result = cur.fetchone()
-        if not result:
+        if not cur.fetchone():
             print("Adding 'entry_method' column to expenses table...")
             cur.execute("ALTER TABLE expenses ADD COLUMN entry_method VARCHAR(20) DEFAULT 'manual'")
             mysql_conn.commit()
             print("Migration successful: 'entry_method' column added.")
 
+        # ── budgets table ────────────────────────────────────────
         cur.execute("SHOW TABLES LIKE 'budgets'")
-        result = cur.fetchone()
-        if not result:
+        if not cur.fetchone():
             print("Creating 'budgets' table...")
             cur.execute("""
                 CREATE TABLE budgets (
-                    user_id INT PRIMARY KEY,
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
                     monthly_limit DECIMAL(10,2) NOT NULL,
+                    month INT NOT NULL,
+                    year  INT NOT NULL,
+                    UNIQUE KEY unique_user_month_year (user_id, month, year),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
             mysql_conn.commit()
             print("Migration successful: 'budgets' table created.")
         else:
-            print("Migration check: 'budgets' table already exists.")
+            # Table exists — make sure month & year columns are present
+            cur.execute("SHOW COLUMNS FROM budgets LIKE 'month'")
+            if not cur.fetchone():
+                print("Adding 'month' column to budgets table...")
+                cur.execute("ALTER TABLE budgets ADD COLUMN month INT NOT NULL DEFAULT 1")
+                mysql_conn.commit()
+                print("Migration successful: 'month' column added.")
 
-        # FIX: Add previous_saved column to wishlist if missing
+            cur.execute("SHOW COLUMNS FROM budgets LIKE 'year'")
+            if not cur.fetchone():
+                print("Adding 'year' column to budgets table...")
+                cur.execute("ALTER TABLE budgets ADD COLUMN year INT NOT NULL DEFAULT 2024")
+                mysql_conn.commit()
+                print("Migration successful: 'year' column added.")
+
+            # Add unique constraint if missing (ignore error if already present)
+            try:
+                cur.execute("""
+                    ALTER TABLE budgets
+                    ADD UNIQUE KEY unique_user_month_year (user_id, month, year)
+                """)
+                mysql_conn.commit()
+                print("Migration successful: unique constraint on budgets added.")
+            except Exception:
+                print("Migration check: unique constraint on budgets already exists.")
+
+        # ── wishlist.previous_saved ──────────────────────────────
         cur.execute("SHOW COLUMNS FROM wishlist LIKE 'previous_saved'")
-        result = cur.fetchone()
-        if not result:
+        if not cur.fetchone():
             print("Adding 'previous_saved' column to wishlist table...")
             cur.execute("ALTER TABLE wishlist ADD COLUMN previous_saved DECIMAL(10,2) DEFAULT 0.0")
             mysql_conn.commit()
@@ -84,6 +111,7 @@ def run_migrations():
 
     except Exception as e:
         print(f"Migration error: {e}")
+        traceback.print_exc()
     finally:
         cur.close()
 
@@ -103,7 +131,10 @@ def is_empty(value):
 @app.route('/signup', methods=['POST'])
 def signup():
     data = request.json
-    username, password, phone, balance = data.get('username'), data.get('password'), data.get('phone'), data.get('balance')
+    username = data.get('username')
+    password = data.get('password')
+    phone    = data.get('phone')
+    balance  = data.get('balance')
     if is_empty(username) or is_empty(password) or is_empty(phone) or balance is None:
         return jsonify({"success": False, "message": "All fields required"}), 400
     cur = get_cursor()
@@ -111,8 +142,10 @@ def signup():
     if cur.fetchone():
         cur.close()
         return jsonify({"success": False, "message": "Username exists"}), 409
-    cur.execute("INSERT INTO users(username, password, phone, balance, role) VALUES (%s, %s, %s, %s, 'user')",
-                (username, password, phone, balance))
+    cur.execute(
+        "INSERT INTO users(username, password, phone, balance, role) VALUES (%s, %s, %s, %s, 'user')",
+        (username, password, phone, balance)
+    )
     mysql_conn.commit()
     cur.close()
     return jsonify({"success": True}), 201
@@ -121,21 +154,32 @@ def signup():
 def login():
     global logged_in_user
     data = request.json
-    username, password = data.get('username'), data.get('password')
+    username = data.get('username')
+    password = data.get('password')
     cur = get_cursor()
-    cur.execute("SELECT id, balance, role, is_active FROM users WHERE username=%s AND password=%s", (username, password))
+    cur.execute(
+        "SELECT id, balance, role, is_active FROM users WHERE username=%s AND password=%s",
+        (username, password)
+    )
     user = cur.fetchone()
     cur.close()
     if not user:
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
     if not user[3]:
         return jsonify({"success": False, "message": "Account deactivated"}), 403
-    logged_in_user["id"], logged_in_user["role"] = user[0], user[2]
-    return jsonify({"success": True, "id": user[0], "role": user[2], "balance": float(user[1]) if user[2] == 'user' else None})
+    logged_in_user["id"]   = user[0]
+    logged_in_user["role"] = user[2]
+    return jsonify({
+        "success": True,
+        "id":      user[0],
+        "role":    user[2],
+        "balance": float(user[1]) if user[2] == 'user' else None
+    })
 
 @app.route('/logout', methods=['POST'])
 def logout():
-    logged_in_user["id"], logged_in_user["role"] = None, None
+    logged_in_user["id"]   = None
+    logged_in_user["role"] = None
     return jsonify({"success": True})
 
 @app.route('/balance', methods=['GET'])
@@ -159,10 +203,10 @@ def get_expenses():
     status_filter = request.args.get('status')
     cur = get_cursor()
     if status_filter:
-        query = "SELECT id, amount, date, time, category, type, status, entry_method FROM expenses WHERE user_id=%s AND status=%s ORDER BY date DESC, time DESC"
+        query  = "SELECT id, amount, date, time, category, type, status, entry_method FROM expenses WHERE user_id=%s AND status=%s ORDER BY date DESC, time DESC"
         params = (logged_in_user["id"], status_filter)
     else:
-        query = "SELECT id, amount, date, time, category, type, status, entry_method FROM expenses WHERE user_id=%s ORDER BY date DESC, time DESC"
+        query  = "SELECT id, amount, date, time, category, type, status, entry_method FROM expenses WHERE user_id=%s ORDER BY date DESC, time DESC"
         params = (logged_in_user["id"],)
     cur.execute(query, params)
     rows = cur.fetchall()
@@ -177,17 +221,17 @@ def get_expenses():
 def add_expense():
     if logged_in_user["role"] != 'user':
         return jsonify({"success": False, "message": "Unauthorized"}), 401
-    data = request.json
-    amount = data.get('amount')
-    category = data.get('category')
-    t_type = data.get('type', 'expense')
-    status = data.get('status', 'confirmed')
+    data         = request.json
+    amount       = data.get('amount')
+    category     = data.get('category')
+    t_type       = data.get('type', 'expense')
+    status       = data.get('status', 'confirmed')
     entry_method = data.get('entry_method', 'manual')
-    date_val = data.get('date')
-    time_val = data.get('time')
+    date_val     = data.get('date')
+    time_val     = data.get('time')
     if amount is None or amount <= 0:
         return jsonify({"success": False, "message": "Invalid amount"}), 400
-    now = datetime.now()
+    now        = datetime.now()
     final_date = date_val if date_val else now.date()
     final_time = time_val if time_val else now.time()
     cur = get_cursor()
@@ -206,19 +250,19 @@ def add_expense():
 def sync_pending_expenses():
     if logged_in_user["role"] != 'user':
         return jsonify({"success": False, "message": "Unauthorized"}), 401
-    data = request.json
+    data          = request.json
     expenses_list = data.get('expenses', [])
     if not expenses_list:
         return jsonify({"success": True, "message": "No expenses to sync"}), 200
-    cur = get_cursor()
+    cur   = get_cursor()
     count = 0
     for item in expenses_list:
         try:
-            amount = item.get('amount')
+            amount   = item.get('amount')
             date_str = item.get('date')
             time_str = item.get('time', '00:00:00')
             category = item.get('category', 'Uncategorized')
-            t_type = item.get('type', 'expense')
+            t_type   = item.get('type', 'expense')
             cur.execute("""
                 SELECT id FROM expenses
                 WHERE user_id=%s AND amount=%s AND date=%s AND type=%s AND status='pending'
@@ -239,33 +283,34 @@ def sync_pending_expenses():
 
 @app.route('/expenses/confirm_sms', methods=['POST'])
 def confirm_sms_expense():
-    return add_expense()
-
-@app.route('/expenses/<int:expense_id>', methods=['PUT'])
-def edit_expense(expense_id):
     if logged_in_user["role"] != 'user':
         return jsonify({"success": False, "message": "Unauthorized"}), 401
-    data = request.json
+    data       = request.json
+    expense_id = data.get('expense_id')
+    if not expense_id:
+        return add_expense()
     cur = get_cursor()
-    cur.execute("SELECT amount, type, category, status FROM expenses WHERE id=%s AND user_id=%s",
-                (expense_id, logged_in_user["id"]))
+    cur.execute(
+        "SELECT amount, type, status FROM expenses WHERE id=%s AND user_id=%s",
+        (expense_id, logged_in_user["id"])
+    )
     row = cur.fetchone()
     if not row:
         cur.close()
-        return jsonify({"success": False, "message": "Not found"}), 404
-    old_amt, old_type, old_category, old_status = float(row[0]), row[1], row[2], row[3]
-    new_amt = float(data.get('amount', old_amt))
-    new_type = data.get('type', old_type)
-    new_category = data.get('category', old_category)
-    new_status = data.get('status', old_status)
-    if old_status == 'confirmed':
-        undo = -old_amt if old_type == 'income' else old_amt
-        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (undo, logged_in_user["id"]))
-    if new_status == 'confirmed':
-        apply = new_amt if new_type == 'income' else -new_amt
-        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (apply, logged_in_user["id"]))
-    cur.execute("UPDATE expenses SET amount=%s, category=%s, type=%s, status=%s WHERE id=%s",
-                (new_amt, new_category, new_type, new_status, expense_id))
+        return jsonify({"success": False, "message": "Expense not found"}), 404
+    amount, t_type, status = float(row[0]), row[1], row[2]
+    if status == 'confirmed':
+        cur.close()
+        return jsonify({"success": False, "message": "Already confirmed"}), 400
+    cur.execute(
+        "UPDATE expenses SET status='confirmed' WHERE id=%s AND user_id=%s",
+        (expense_id, logged_in_user["id"])
+    )
+    adj = amount if t_type == 'income' else -amount
+    cur.execute(
+        "UPDATE users SET balance = balance + %s WHERE id=%s",
+        (adj, logged_in_user["id"])
+    )
     mysql_conn.commit()
     cur.close()
     return jsonify({"success": True})
@@ -275,8 +320,10 @@ def delete_expense(expense_id):
     if logged_in_user["role"] != 'user':
         return jsonify({"success": False, "message": "Unauthorized"}), 401
     cur = get_cursor()
-    cur.execute("SELECT amount, type, status FROM expenses WHERE id=%s AND user_id=%s",
-                (expense_id, logged_in_user["id"]))
+    cur.execute(
+        "SELECT amount, type, status FROM expenses WHERE id=%s AND user_id=%s",
+        (expense_id, logged_in_user["id"])
+    )
     row = cur.fetchone()
     if not row:
         cur.close()
@@ -297,7 +344,7 @@ def delete_expense(expense_id):
 def admin_users():
     if logged_in_user["role"] != 'admin':
         return jsonify({"success": False, "message": "Admin only"}), 403
-    q = request.args.get('q', '').strip()
+    q   = request.args.get('q', '').strip()
     cur = get_cursor()
     if q:
         cur.execute(
@@ -308,7 +355,10 @@ def admin_users():
         cur.execute("SELECT id, username, phone, balance, is_active FROM users WHERE role='user'")
     rows = cur.fetchall()
     cur.close()
-    return jsonify([{"id": r[0], "username": r[1], "phone": r[2], "balance": float(r[3]), "active": bool(r[4])} for r in rows])
+    return jsonify([{
+        "id": r[0], "username": r[1], "phone": r[2],
+        "balance": float(r[3]), "active": bool(r[4])
+    } for r in rows])
 
 @app.route('/admin/users/<int:user_id>', methods=['DELETE'])
 def admin_delete_user(user_id):
@@ -340,7 +390,10 @@ def admin_expenses():
     """)
     rows = cur.fetchall()
     cur.close()
-    return jsonify([{"username": r[0], "amount": float(r[1]), "category": r[2], "date": str(r[3]), "type": r[4]} for r in rows])
+    return jsonify([{
+        "username": r[0], "amount": float(r[1]),
+        "category": r[2], "date": str(r[3]), "type": r[4]
+    } for r in rows])
 
 @app.route('/admin/analytics', methods=['GET'])
 def admin_analytics():
@@ -354,41 +407,42 @@ def admin_analytics():
     cur.close()
     return jsonify({"total_users": u_count, "total_expenses": float(e_sum)})
 
+# ================= BUDGET MODULE =================
 
-#budget limit set stuff
 @app.route('/budget/set', methods=['POST'])
 def set_budget():
-    data = request.json
-    user_id = data['user_id']
+    data          = request.json
+    user_id       = data['user_id']
     monthly_limit = data['monthly_limit']
     cursor = get_cursor()
     cursor.execute("""
-    INSERT INTO budgets (user_id, monthly_limit, month, year)
-    VALUES (%s,%s,MONTH(CURDATE()),YEAR(CURDATE()))
-    ON DUPLICATE KEY UPDATE monthly_limit = %s
-    """,(user_id, monthly_limit, monthly_limit))
+        INSERT INTO budgets (user_id, monthly_limit, month, year)
+        VALUES (%s, %s, MONTH(CURDATE()), YEAR(CURDATE()))
+        ON DUPLICATE KEY UPDATE monthly_limit = %s
+    """, (user_id, monthly_limit, monthly_limit))
     mysql_conn.commit()
     cursor.close()
-    return jsonify({"message":"Budget saved"})
+    return jsonify({"message": "Budget saved"})
 
 @app.route('/budget/progress/<int:user_id>')
 def budget_progress(user_id):
     cursor = get_cursor(dictionary=True)
     cursor.execute("""
-    SELECT monthly_limit FROM budgets
-    WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
-    """,(user_id,))
+        SELECT monthly_limit FROM budgets
+        WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
+    """, (user_id,))
     budget = cursor.fetchone()
     if not budget:
         cursor.close()
-        return jsonify({"monthly_limit":0,"total_expense":0,"progress":0})
+        return jsonify({"monthly_limit": 0, "total_expense": 0, "progress": 0})
     monthly_limit = float(budget['monthly_limit'])
     cursor.execute("""
-    SELECT COALESCE(SUM(amount),0) as spent FROM expenses
-    WHERE user_id=%s AND type='expense'
-    AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
-    """,(user_id,))
-    row = cursor.fetchone()
+        SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
+        WHERE user_id=%s AND type='expense'
+        AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
+        AND status='confirmed'
+    """, (user_id,))
+    row   = cursor.fetchone()
     spent = float(row['spent']) if row and row['spent'] is not None else 0.0
     progress = min(spent / monthly_limit, 1) if monthly_limit > 0 else 0
     cursor.close()
@@ -398,22 +452,23 @@ def budget_progress(user_id):
 def check_alert(user_id):
     cursor = get_cursor(dictionary=True)
     cursor.execute("""
-    SELECT monthly_limit FROM budgets
-    WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
-    """,(user_id,))
+        SELECT monthly_limit FROM budgets
+        WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
+    """, (user_id,))
     budget = cursor.fetchone()
     if not budget:
         cursor.close()
-        return jsonify({"alert":None})
+        return jsonify({"alert": None})
     limit = float(budget['monthly_limit'])
     cursor.execute("""
-    SELECT COALESCE(SUM(amount),0) as spent FROM expenses
-    WHERE user_id=%s AND type='expense'
-    AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
-    """,(user_id,))
-    spent = float(cursor.fetchone()['spent'])
+        SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
+        WHERE user_id=%s AND type='expense'
+        AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
+        AND status='confirmed'
+    """, (user_id,))
+    spent   = float(cursor.fetchone()['spent'])
     percent = (spent / limit) * 100 if limit > 0 else 0
-    alert = None
+    alert   = None
     if percent >= 90:
         alert = "Critical: 90% of your budget used"
     elif percent >= 75:
@@ -421,32 +476,34 @@ def check_alert(user_id):
     elif percent >= 50:
         alert = "Notice: 50% of your budget used"
     cursor.close()
-    return jsonify({"percent":percent,"alert":alert})
+    return jsonify({"percent": percent, "alert": alert})
 
 @app.route('/notifications/<int:user_id>')
 def get_notifications(user_id):
     cursor = get_cursor(dictionary=True)
     cursor.execute("""
-    SELECT id, message, created_at FROM notifications
-    WHERE user_id=%s ORDER BY created_at DESC
-    """,(user_id,))
+        SELECT id, message, created_at FROM notifications
+        WHERE user_id=%s ORDER BY created_at DESC
+    """, (user_id,))
     notifications = cursor.fetchall()
     cursor.close()
     return jsonify(notifications)
 
+# ================= WISHLIST MODULE =================
+
 @app.route('/wishlist', methods=['POST'])
 def add_wishlist_item():
-    data = request.json
-    user_id = data.get("user_id", logged_in_user["id"])
-    item_name = data.get("item_name")
+    data          = request.json
+    user_id       = data.get("user_id", logged_in_user["id"])
+    item_name     = data.get("item_name")
     target_amount = data.get("target_amount")
     if not item_name or not target_amount or not user_id:
         return jsonify({"success": False, "message": "Invalid data"}), 400
     cur = get_cursor()
     cur.execute("""
         INSERT INTO wishlist (user_id, item_name, target_amount, total_saved)
-        VALUES (%s,%s,%s, 0.0)
-    """,(user_id, item_name, target_amount))
+        VALUES (%s, %s, %s, 0.0)
+    """, (user_id, item_name, target_amount))
     mysql_conn.commit()
     cur.close()
     return jsonify({"success": True}), 201
@@ -458,33 +515,30 @@ def get_wishlist(user_id):
         SELECT id, item_name, target_amount, total_saved,
                COALESCE(previous_saved, 0.0) AS previous_saved
         FROM wishlist WHERE user_id=%s
-    """,(user_id,))
+    """, (user_id,))
     items = cur.fetchall()
     for item in items:
-        if isinstance(item.get('target_amount'), Decimal):
-            item['target_amount'] = float(item['target_amount'])
-        if isinstance(item.get('total_saved'), Decimal):
-            item['total_saved'] = float(item['total_saved'])
-        if isinstance(item.get('previous_saved'), Decimal):
-            item['previous_saved'] = float(item['previous_saved'])
-        elif item.get('previous_saved') is None:
-            item['previous_saved'] = 0.0
+        for key in ('target_amount', 'total_saved', 'previous_saved'):
+            if isinstance(item.get(key), Decimal):
+                item[key] = float(item[key])
+            elif item.get(key) is None:
+                item[key] = 0.0
     cur.close()
     return jsonify(items)
 
 @app.route('/wishlist/save', methods=['POST'])
 def save_to_wishlist():
-    data = request.json
-    user_id = data.get("user_id", logged_in_user["id"])
+    data        = request.json
+    user_id     = data.get("user_id", logged_in_user["id"])
     wishlist_id = data.get("wishlist_id")
-    amount = data.get("amount")
+    amount      = data.get("amount")
     if not wishlist_id or not amount or not user_id:
         return jsonify({"success": False, "message": "Invalid data"}), 400
     cur = get_cursor(dictionary=True)
     cur.execute("""
         INSERT INTO wishlist_savings (wishlist_id, user_id, amount, month, year)
-        VALUES (%s,%s,%s,MONTH(CURDATE()),YEAR(CURDATE()))
-    """,(wishlist_id, user_id, amount))
+        VALUES (%s, %s, %s, MONTH(CURDATE()), YEAR(CURDATE()))
+    """, (wishlist_id, user_id, amount))
     cur.execute("""
         UPDATE wishlist SET total_saved = total_saved + %s, previous_saved = 0.0
         WHERE id = %s AND user_id = %s
@@ -509,21 +563,23 @@ def save_to_wishlist():
 
 @app.route('/wishlist/dismiss_recovery', methods=['POST'])
 def dismiss_recovery():
-    data = request.json
-    user_id = data.get("user_id", logged_in_user["id"])
+    data        = request.json
+    user_id     = data.get("user_id", logged_in_user["id"])
     wishlist_id = data.get("wishlist_id")
     if not wishlist_id or not user_id:
         return jsonify({"success": False, "message": "Invalid data"}), 400
     cur = get_cursor()
-    cur.execute("UPDATE wishlist SET previous_saved = 0.0 WHERE id=%s AND user_id=%s",
-                (wishlist_id, user_id))
+    cur.execute(
+        "UPDATE wishlist SET previous_saved = 0.0 WHERE id=%s AND user_id=%s",
+        (wishlist_id, user_id)
+    )
     mysql_conn.commit()
     cur.close()
     return jsonify({"success": True})
 
 @app.route('/wishlist/<int:wishlist_id>', methods=['DELETE'])
 def delete_wishlist_item(wishlist_id):
-    data = request.json or {}
+    data    = request.json or {}
     user_id = data.get("user_id", logged_in_user.get("id"))
     if not user_id:
         return jsonify({"success": False, "message": "Unauthorized or missing user_id"}), 401
@@ -542,13 +598,14 @@ def get_balances(user_id):
     cur.execute("SELECT balance FROM users WHERE id=%s", (user_id,))
     balance = float(cur.fetchone()["balance"])
     cur.execute("""
-        SELECT COALESCE(SUM(total_saved),0) AS saved FROM wishlist WHERE user_id=%s
-    """,(user_id,))
-    saved = float(cur.fetchone()["saved"])
+        SELECT COALESCE(SUM(total_saved), 0) AS saved FROM wishlist WHERE user_id=%s
+    """, (user_id,))
+    saved     = float(cur.fetchone()["saved"])
     spendable = balance - saved
     cur.close()
     return jsonify({"actual_balance": balance, "saved_amount": saved, "spendable_balance": spendable})
 
+# ================= BUDGET CARD =================
 
 @app.route('/budget/card', methods=['GET'])
 def budget_card():
@@ -562,84 +619,85 @@ def budget_card():
         SELECT monthly_limit FROM budgets
         WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
     """, (user_id,))
-    budget_row = cur.fetchone()
+    budget_row    = cur.fetchone()
     monthly_limit = float(budget_row['monthly_limit']) if budget_row else None
 
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS spent FROM expenses
-        WHERE user_id=%s AND type='expense'
+        SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
     """, (user_id,))
     month_spent = float(cur.fetchone()['spent'])
 
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS income FROM expenses
-        WHERE user_id=%s AND type='income'
+        SELECT COALESCE(SUM(amount), 0) AS income FROM expenses
+        WHERE user_id=%s AND type='income' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
     """, (user_id,))
     month_income = float(cur.fetchone()['income'])
 
     cur.execute("""
         SELECT category AS name, SUM(amount) AS amount FROM expenses
-        WHERE user_id=%s AND type='expense'
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
         GROUP BY category ORDER BY amount DESC LIMIT 4
     """, (user_id,))
     categories = [{"name": r['name'], "amount": float(r['amount'])} for r in cur.fetchall()]
 
     from calendar import monthrange
-    today = datetime.today()
+    today        = datetime.today()
     days_in_month = monthrange(today.year, today.month)[1]
-    days_left = days_in_month - today.day
+    days_left    = days_in_month - today.day
 
-    budget_pct = None
+    budget_pct       = None
     budget_remaining = None
-    projected = None
+    projected        = None
     if monthly_limit and monthly_limit > 0:
-        budget_pct = round((month_spent / monthly_limit) * 100, 1)
+        budget_pct       = round((month_spent / monthly_limit) * 100, 1)
         budget_remaining = round(monthly_limit - month_spent, 2)
-        daily_rate = month_spent / max(today.day, 1)
-        projected = round(daily_rate * days_in_month, 2)
+        daily_rate       = month_spent / max(today.day, 1)
+        projected        = round(daily_rate * days_in_month, 2)
 
     savings_rate = 0
     if month_income > 0:
         savings_rate = round(((month_income - month_spent) / month_income) * 100, 1)
 
     if budget_pct is None:
-        status = 'info'
+        status         = 'info'
         status_message = f"You've spent ₹{month_spent:.0f} this month. Set a budget to track progress."
     elif budget_pct >= 100:
-        status = 'danger'
+        status         = 'danger'
         status_message = f"Over budget! Spent ₹{month_spent:.0f} of ₹{monthly_limit:.0f}."
     elif budget_pct >= 75:
-        status = 'warning'
+        status         = 'warning'
         status_message = f"75% of budget used. ₹{budget_remaining:.0f} left for {days_left} days."
     elif budget_pct >= 50:
-        status = 'warning'
+        status         = 'warning'
         status_message = f"Halfway through budget. ₹{budget_remaining:.0f} remaining."
     else:
-        status = 'success'
+        status         = 'success'
         status_message = f"On track! ₹{budget_remaining:.0f} left for {days_left} days."
 
     top_category = categories[0]['name'] if categories else None
 
     cur.close()
     return jsonify({
-        "success": True,
-        "budget": monthly_limit,
-        "budget_pct": budget_pct,
+        "success":         True,
+        "budget":          monthly_limit,
+        "budget_pct":      budget_pct,
         "budget_remaining": budget_remaining,
-        "month_spent": month_spent,
-        "month_income": month_income,
-        "savings_rate": savings_rate,
-        "categories": categories,
-        "days_left": days_left,
-        "projected": projected,
-        "status": status,
-        "status_message": status_message,
-        "top_category": top_category,
+        "month_spent":     month_spent,
+        "month_income":    month_income,
+        "savings_rate":    savings_rate,
+        "categories":      categories,
+        "days_left":       days_left,
+        "projected":       projected,
+        "status":          status,
+        "status_message":  status_message,
+        "top_category":    top_category,
     })
 
+# ================= SMART INSIGHTS =================
 
 @app.route('/insights/smart', methods=['GET'])
 def smart_insights():
@@ -647,7 +705,7 @@ def smart_insights():
     if not user_id:
         return jsonify({"success": False, "message": "Missing user_id"}), 400
 
-    cur = get_cursor(dictionary=True)
+    cur      = get_cursor(dictionary=True)
     insights = []
 
     cur.execute("""
@@ -658,14 +716,14 @@ def smart_insights():
     if budget_row:
         limit = float(budget_row['monthly_limit'])
         cur.execute("""
-            SELECT COALESCE(SUM(amount),0) AS spent FROM expenses
-            WHERE user_id=%s AND type='expense'
+            SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
+            WHERE user_id=%s AND type='expense' AND status='confirmed'
             AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
         """, (user_id,))
         spent = float(cur.fetchone()['spent'])
-        pct = (spent / limit * 100) if limit > 0 else 0
+        pct   = (spent / limit * 100) if limit > 0 else 0
         if pct >= 90:
-            insights.append({"type": "danger", "message": f"You've used {pct:.0f}% of your monthly budget!"})
+            insights.append({"type": "danger",  "message": f"You've used {pct:.0f}% of your monthly budget!"})
         elif pct >= 70:
             insights.append({"type": "warning", "message": f"Budget {pct:.0f}% used. Slow down spending."})
         else:
@@ -673,7 +731,7 @@ def smart_insights():
 
     cur.execute("""
         SELECT category, SUM(amount) AS total FROM expenses
-        WHERE user_id=%s AND type='expense'
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
         GROUP BY category ORDER BY total DESC LIMIT 1
     """, (user_id,))
@@ -682,15 +740,15 @@ def smart_insights():
         insights.append({"type": "info", "message": f"Top spend: {top['category']} (₹{float(top['total']):.0f} this month)"})
 
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS prev FROM expenses
-        WHERE user_id=%s AND type='expense'
+        SELECT COALESCE(SUM(amount), 0) AS prev FROM expenses
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()-INTERVAL 1 MONTH)
         AND YEAR(date)=YEAR(CURDATE()-INTERVAL 1 MONTH)
     """, (user_id,))
     prev = float(cur.fetchone()['prev'])
     cur.execute("""
-        SELECT COALESCE(SUM(amount),0) AS curr FROM expenses
-        WHERE user_id=%s AND type='expense'
+        SELECT COALESCE(SUM(amount), 0) AS curr FROM expenses
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
         AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
     """, (user_id,))
     curr = float(cur.fetchone()['curr'])
@@ -719,6 +777,276 @@ def _ctx(uid):
 
 def _set_ctx(uid, intent, data=None):
     _conversation_ctx[uid] = {"last_intent": intent, "last_data": data or {}}
+
+
+# ── KEYWORD → SUGGESTION MENUS ─────────────────────────────
+KEYWORD_MENUS = {
+    "budget": {
+        "label": "budget",
+        "prompt": "Here are some things I can help with for 💰 Budget:",
+        "suggestions": [
+            "How much of my budget have I used this month?",
+            "Am I over budget?",
+            "How much budget is remaining?",
+            "Set my monthly budget to 10000",
+            "What is my projected spend for this month?",
+        ],
+    },
+    "food": {
+        "label": "Food",
+        "prompt": "Here are some Food 🍔 expense queries:",
+        "suggestions": [
+            "How much did I spend on food this month?",
+            "Show my food expenses this month",
+            "How much did I spend on food last month?",
+            "Compare food spending this month vs last month",
+        ],
+    },
+    "transport": {
+        "label": "Transport",
+        "prompt": "Here are some Transport 🚗 expense queries:",
+        "suggestions": [
+            "How much did I spend on transport this month?",
+            "Show my transport expenses this month",
+            "How much did I spend on transport last month?",
+        ],
+    },
+    "shopping": {
+        "label": "Shopping",
+        "prompt": "Here are some Shopping 🛍 expense queries:",
+        "suggestions": [
+            "How much did I spend on shopping this month?",
+            "Show my shopping expenses this month",
+            "How much did I spend on shopping last month?",
+        ],
+    },
+    "entertainment": {
+        "label": "Entertainment",
+        "prompt": "Here are some Entertainment 🎬 expense queries:",
+        "suggestions": [
+            "How much did I spend on entertainment this month?",
+            "Show my entertainment expenses this month",
+            "How much on entertainment last month?",
+        ],
+    },
+    "health": {
+        "label": "Health",
+        "prompt": "Here are some Health 🏥 expense queries:",
+        "suggestions": [
+            "How much did I spend on health this month?",
+            "Show my health expenses this month",
+            "How much on medicine last month?",
+        ],
+    },
+    "bills": {
+        "label": "Bills",
+        "prompt": "Here are some Bills 📄 expense queries:",
+        "suggestions": [
+            "How much did I spend on bills this month?",
+            "Show my bills this month",
+            "How much on bills last month?",
+        ],
+    },
+    "wishlist": {
+        "label": "wishlist / goals",
+        "prompt": "Here are some Wishlist 🎯 queries:",
+        "suggestions": [
+            "Show all my wishlist goals",
+            "How much have I saved for iPhone?",
+            "How much have I saved for laptop?",
+            "When can I reach my goals?",
+            "How much more do I need for my goals?",
+        ],
+    },
+    "goal": {
+        "label": "wishlist / goals",
+        "prompt": "Here are some Goal 🎯 queries:",
+        "suggestions": [
+            "Show all my wishlist goals",
+            "When can I reach my goals?",
+            "How much more do I need for my goals?",
+            "How much have I saved so far?",
+        ],
+    },
+    "expense": {
+        "label": "expenses",
+        "prompt": "Here are some Expense 📊 queries:",
+        "suggestions": [
+            "How much did I spend this month?",
+            "Show category wise spending breakdown",
+            "Compare this month vs last month",
+            "Show my recent transactions",
+            "What are my top expense categories?",
+        ],
+    },
+    "spending": {
+        "label": "spending",
+        "prompt": "Here are some Spending 📊 queries:",
+        "suggestions": [
+            "How much did I spend this month?",
+            "Where am I spending the most?",
+            "Show category wise spending breakdown",
+            "Compare this month vs last month",
+            "Show my recent transactions",
+        ],
+    },
+    "save": {
+        "label": "savings",
+        "prompt": "Here are some Savings 💎 queries:",
+        "suggestions": [
+            "How much have I saved this month?",
+            "What is my savings rate?",
+            "How can I save more money?",
+            "How can I save 50000 this month?",
+            "Am I saving enough?",
+        ],
+    },
+    "saving": {
+        "label": "savings",
+        "prompt": "Here are some Savings 💎 queries:",
+        "suggestions": [
+            "How much have I saved this month?",
+            "What is my savings rate?",
+            "How can I save more money?",
+            "Am I saving enough?",
+        ],
+    },
+    "savings": {
+        "label": "savings",
+        "prompt": "Here are some Savings 💎 queries:",
+        "suggestions": [
+            "How much have I saved this month?",
+            "What is my savings rate?",
+            "How can I save more money?",
+            "Am I saving enough?",
+        ],
+    },
+    "income": {
+        "label": "income",
+        "prompt": "Here are some Income 💵 queries:",
+        "suggestions": [
+            "What is my total income this month?",
+            "How much did I earn this month?",
+            "Show my income vs expenses",
+            "What is my savings rate?",
+        ],
+    },
+    "salary": {
+        "label": "income / salary",
+        "prompt": "Here are some Salary 💵 queries:",
+        "suggestions": [
+            "What is my total income this month?",
+            "How much did I earn this month?",
+            "Show my income vs expenses",
+            "What is my savings rate?",
+        ],
+    },
+    "tips": {
+        "label": "financial tips",
+        "prompt": "Here are some Financial Tips 📚 I can give you:",
+        "suggestions": [
+            "Give me financial tips",
+            "How can I reduce my expenses?",
+            "How to save more money?",
+            "What is the 50/30/20 rule for my income?",
+            "How should I manage my money?",
+        ],
+    },
+    "advice": {
+        "label": "financial advice",
+        "prompt": "Here are some Advice 📚 queries:",
+        "suggestions": [
+            "Give me financial advice",
+            "How can I save more money?",
+            "How to reduce my expenses?",
+            "What is the 50/30/20 rule for my income?",
+        ],
+    },
+    "afford": {
+        "label": "purchase advice",
+        "prompt": "Here are some Purchase 🛒 advice queries:",
+        "suggestions": [
+            "Can I afford a phone for 15000?",
+            "Should I buy a laptop for 60000?",
+            "Can I afford a purchase of 5000?",
+            "When can I afford my wishlist goals?",
+        ],
+    },
+    "buy": {
+        "label": "purchase advice",
+        "prompt": "Here are some Purchase 🛒 queries:",
+        "suggestions": [
+            "Should I buy a laptop for 60000?",
+            "Can I afford a phone for 15000?",
+            "When can I buy my wishlist items?",
+            "Can I afford a purchase of 5000?",
+        ],
+    },
+    "balance": {
+        "label": "balance",
+        "prompt": "Here are some Balance 💳 queries:",
+        "suggestions": [
+            "What is my current balance?",
+            "How much can I spend?",
+            "How much have I saved in my wishlist goals?",
+            "What is my spendable balance?",
+        ],
+    },
+    "report": {
+        "label": "report / summary",
+        "prompt": "Here are some Report 📋 queries:",
+        "suggestions": [
+            "Show my spending summary this month",
+            "Compare this month vs last month",
+            "Show category wise spending breakdown",
+            "What are my top expense categories?",
+            "Show my recent transactions",
+        ],
+    },
+    "summary": {
+        "label": "summary",
+        "prompt": "Here are some Summary 📋 queries:",
+        "suggestions": [
+            "Show my spending summary this month",
+            "How much did I spend this month?",
+            "Compare this month vs last month",
+            "What is my savings rate?",
+        ],
+    },
+}
+
+_PURE_KEYWORDS = set(KEYWORD_MENUS.keys()) | {
+    "food", "transport", "shopping", "entertainment",
+    "health", "bills", "budget", "wishlist", "goal", "goals",
+    "expense", "expenses", "spending", "save", "saving", "savings",
+    "income", "salary", "tips", "advice", "afford", "buy",
+    "balance", "report", "summary",
+}
+
+
+def _detect_keyword_menu(text):
+    tl = text.lower().strip()
+    question_signals = [
+        "how much", "how many", "how long", "how can", "how do", "how will",
+        "what is", "what are", "what was", "what did",
+        "show me", "show my", "list my", "give me",
+        "am i", "did i", "can i", "should i", "is my",
+        "when can", "when will", "when did",
+        "i spent", "i paid", "i bought", "i earned",
+        "add ", "record ", "set my", "update my",
+        "compare", "vs ", "versus",
+    ]
+    if any(tl.startswith(q) or q in tl for q in question_signals):
+        return None
+    if len(tl.split()) > 4:
+        return None
+    for keyword, menu in KEYWORD_MENUS.items():
+        if tl == keyword or tl == keyword + "s" or tl == keyword + "ing":
+            return menu
+        words = tl.split()
+        if len(words) <= 2 and keyword in words:
+            return menu
+    return None
 
 
 CATEGORY_MAP = {
@@ -829,7 +1157,7 @@ def extract_type(text):
 
 
 def extract_date(text):
-    tl = text.lower()
+    tl    = text.lower()
     today = date_type.today()
     if "day before yesterday" in tl:
         return str(today - timedelta(days=2)), "day before yesterday"
@@ -851,7 +1179,7 @@ def extract_date(text):
 
 
 def date_range_from_text(text):
-    tl = text.lower()
+    tl    = text.lower()
     today = date_type.today()
     if "last month" in tl:
         first = today.replace(day=1) - timedelta(days=1)
@@ -872,7 +1200,7 @@ def date_range_from_text(text):
 
 def _get_top_category(uid, cur, start):
     cur.execute("""
-        SELECT category, SUM(amount) as total FROM expenses
+        SELECT category, SUM(amount) AS total FROM expenses
         WHERE user_id=%s AND type='expense' AND status='confirmed' AND date >= %s
         GROUP BY category ORDER BY total DESC LIMIT 1
     """, (uid, start))
@@ -886,7 +1214,7 @@ def _get_top_category(uid, cur, start):
 
 def _get_month_spent(uid, cur, start):
     cur.execute("""
-        SELECT IFNULL(SUM(amount),0) FROM expenses
+        SELECT IFNULL(SUM(amount), 0) FROM expenses
         WHERE user_id=%s AND type='expense' AND status='confirmed' AND date >= %s
     """, (uid, start))
     row = cur.fetchone()
@@ -972,6 +1300,7 @@ def classify_intent(text, ctx):
         "give me tips", "give me advice", "suggest me", "any suggestions",
         "what is a good budget", "money management", "investment advice",
         "financial advice", "financial planning", "save money",
+        "how to save", "how to manage",
     ]
     if any(k in tl for k in financial_advice_phrases):
         return "FINANCIAL_ADVICE"
@@ -1035,7 +1364,7 @@ def classify_intent(text, ctx):
             "spending limit reached", "crossed the limit",
             "are my expenses too high", "is my spending high",
             "too much this month",
-            ]):
+    ]):
         return "CHECK_BUDGET"
     if "budget" in tl and any(k in tl for k in [
             "left", "remaining", "used", "status",
@@ -1156,95 +1485,48 @@ def classify_intent(text, ctx):
 
 
 def handle_greeting(username, balance, uid, cur):
-    today = date_type.today()
-    start = str(today.replace(day=1))
+    today      = date_type.today()
+    start      = str(today.replace(day=1))
     month_spent = _get_month_spent(uid, cur, start)
     top_cat, top_amt = _get_top_category(uid, cur, start)
-    greeting = f"Hey {username}! I'm FinBot, your personal finance assistant.\n\n"
-    greeting += f"Balance: Rs.{balance:.2f}\n"
+    greeting   = f"Hey {username}! 👋 I'm FinBot, your personal finance assistant.\n\n"
+    greeting  += f"💳 Balance: Rs.{balance:.2f}\n"
     if month_spent > 0:
-        greeting += f"Spent this month: Rs.{month_spent:.2f}\n"
+        greeting += f"📊 Spent this month: Rs.{month_spent:.2f}\n"
         if top_cat:
-            greeting += f"Top category: {top_cat} (Rs.{top_amt:.2f})\n"
+            greeting += f"🏆 Top category: {top_cat} (Rs.{top_amt:.2f})\n"
     greeting += (
-        "\nWhat can I help you with?\n\n"
+        "\n💡 Tip: Type a keyword to see suggested questions!\n\n"
+        "Try these keywords:\n"
+        "  • budget  — budget tracking & alerts\n"
+        "  • expense — spending summaries\n"
+        "  • wishlist — savings goals\n"
+        "  • savings — how much you've saved\n"
+        "  • food / transport / shopping — category spending\n"
+        "  • tips — financial advice\n"
+        "  • buy / afford — purchase advice\n\n"
+        "Or just ask me directly:\n"
         "  'I spent 300 on food'\n"
         "  'How much did I spend this week?'\n"
-        "  'Show category wise spending'\n"
-        "  'Am I over budget?'\n"
-        "  'How can I save 50000 this month?'\n"
-        "  'Show my wishlist progress'\n"
-        "  'How much more for my iPhone goal?'\n"
-        "  'Give me financial tips'"
+        "  'Am I over budget?'"
     )
     return greeting
-
-
-def handle_add_expense(text, uid, cur, conn):
-    amount = extract_amount(text)
-    category = extract_category(text) or "Other"
-    t_type = extract_type(text)
-    date_str, date_label = extract_date(text)
-    if not amount:
-        return "I couldn't find an amount.\n\nTry: 'I spent 300 on food' or 'Add 500 for transport'", False
-    now = datetime.now()
-    time_str = f"{now.hour:02d}:{now.minute:02d}:{now.second:02d}"
-    cur.execute(
-        "INSERT INTO expenses(amount, date, time, category, user_id, type, status, entry_method) "
-        "VALUES (%s,%s,%s,%s,%s,%s,'confirmed','manual')",
-        (amount, date_str, time_str, category, uid, t_type)
-    )
-    adj = amount if t_type == "income" else -amount
-    cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (adj, uid))
-    conn.commit()
-    sign = "+" if t_type == "income" else "-"
-    verb = "Income" if t_type == "income" else "Expense"
-    today = date_type.today()
-    start = str(today.replace(day=1))
-    cur.execute("""
-        SELECT IFNULL(SUM(amount),0), COUNT(*) FROM expenses
-        WHERE user_id=%s AND type='expense' AND status='confirmed'
-        AND LOWER(category)=LOWER(%s) AND date >= %s
-    """, (uid, category, start))
-    cat_row = cur.fetchone()
-    if isinstance(cat_row, dict):
-        cat_total = float(list(cat_row.values())[0])
-        cat_count = int(list(cat_row.values())[1])
-    else:
-        cat_total = float(cat_row[0])
-        cat_count = int(cat_row[1])
-    response = (
-        f"✅ {verb} recorded!\n\n"
-        f"  Amount:   Rs.{amount:.2f}\n"
-        f"  Category: {category}\n"
-        f"  Date:     {date_label}\n"
-        f"  Balance:  {sign}Rs.{amount:.2f}\n"
-    )
-    if t_type == "expense" and cat_total > 0:
-        response += f"\n💡 {category} this month: Rs.{cat_total:.2f} ({cat_count} transactions)."
-        if category == "Food" and cat_total > 3000:
-            response += "\n   Try cooking at home a few days to cut costs."
-        elif category == "Transport" and cat_total > 3000:
-            response += "\n   Consider public transport to reduce travel costs."
-        elif category == "Shopping" and cat_total > 5000:
-            response += "\n   Watch out — shopping is getting high this month!"
-    return response, True
 
 
 def handle_get_total_expense(text, uid, cur):
     tl = text.lower()
     if "so far" in tl or "overall" in tl or "all time" in tl:
         cur.execute("""
-            SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),
-                   IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END),0),
+            SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0),
+                   IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
                    COUNT(*) FROM expenses WHERE user_id=%s AND status='confirmed'
         """, (uid,))
         label = "All Time"
     else:
         start, end, label = date_range_from_text(text)
         cur.execute("""
-            SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),
-                   IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END),0),
+            SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0),
+                   IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
                    COUNT(*) FROM expenses
             WHERE user_id=%s AND status='confirmed' AND date BETWEEN %s AND %s
         """, (uid, start, end))
@@ -1254,7 +1536,7 @@ def handle_get_total_expense(text, uid, cur):
         spent, earned, count = float(vals[0]), float(vals[1]), int(vals[2])
     else:
         spent, earned, count = float(row[0]), float(row[1]), int(row[2])
-    net = earned - spent
+    net      = earned - spent
     response = (
         f"Summary — {label}:\n\n"
         f"  Total Spent:  Rs.{spent:.2f}\n"
@@ -1274,7 +1556,7 @@ def handle_get_total_expense(text, uid, cur):
 
 
 def handle_category_expense(text, uid, cur):
-    category = extract_category(text) or "Other"
+    category       = extract_category(text) or "Other"
     start, end, label = date_range_from_text(text)
     cur.execute("""
         SELECT IFNULL(SUM(amount), 0), COUNT(*) FROM expenses
@@ -1289,13 +1571,13 @@ def handle_category_expense(text, uid, cur):
     if total == 0:
         return f"No {category} expenses found for {label}."
     cur.execute("""
-        SELECT IFNULL(SUM(amount),0) FROM expenses
+        SELECT IFNULL(SUM(amount), 0) FROM expenses
         WHERE user_id=%s AND status='confirmed' AND type='expense' AND date BETWEEN %s AND %s
     """, (uid, start, end))
-    row2 = cur.fetchone()
+    row2      = cur.fetchone()
     total_all = float(list(row2.values())[0]) if isinstance(row2, dict) else float(row2[0])
-    pct = (total / total_all * 100) if total_all > 0 else 0
-    response = (
+    pct       = (total / total_all * 100) if total_all > 0 else 0
+    response  = (
         f"{category} spending — {label}:\n\n"
         f"  Total:         Rs.{total:.2f}\n"
         f"  Transactions:  {count}\n"
@@ -1315,9 +1597,7 @@ def handle_category_expense(text, uid, cur):
 def _get_budget_this_month(cur, uid):
     cur.execute("""
         SELECT monthly_limit FROM budgets
-        WHERE user_id=%s
-          AND month  = MONTH(CURDATE())
-          AND year   = YEAR(CURDATE())
+        WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
     """, (uid,))
     row = cur.fetchone()
     if row is None:
@@ -1327,12 +1607,12 @@ def _get_budget_this_month(cur, uid):
 
 def handle_check_budget(uid, cur):
     cur.execute("SELECT balance FROM users WHERE id=%s", (uid,))
-    row = cur.fetchone()
+    row     = cur.fetchone()
     balance = float(row['balance']) if isinstance(row, dict) else float(row[0])
 
-    limit = _get_budget_this_month(cur, uid)
-    today = date_type.today()
-    start = str(today.replace(day=1))
+    limit       = _get_budget_this_month(cur, uid)
+    today       = date_type.today()
+    start       = str(today.replace(day=1))
     month_spent = _get_month_spent(uid, cur, start)
 
     if limit is None:
@@ -1354,26 +1634,26 @@ def handle_check_budget(uid, cur):
     top_cat, top_amt = _get_top_category(uid, cur, start)
 
     if pct >= 100:
-        excess = month_spent - limit
+        excess     = month_spent - limit
         alert_line = f"🚨 OVER BUDGET by Rs.{excess:.0f}!"
-        emoji = "🚨"
-        title = "Over Budget!"
+        emoji      = "🚨"
+        title      = "Over Budget!"
     elif pct >= 90:
         alert_line = "🔴 Critical — 90%+ of budget used."
-        emoji = "🔴"
-        title = "Critical Alert"
+        emoji      = "🔴"
+        title      = "Critical Alert"
     elif pct >= 75:
-        alert_line = "🟠 Warning — 75%+ of budget used."
-        emoji = "🟠"
-        title = "Budget Warning"
+        alert_line = "🟡 Warning — 75%+ of budget used."
+        emoji      = "🟡"
+        title      = "Budget Warning"
     elif pct >= 50:
-        alert_line = "🟡 Notice — 50%+ of budget used."
-        emoji = "🟡"
-        title = "Heads Up"
+        alert_line = "🔵 Notice — 50%+ of budget used."
+        emoji      = "🔵"
+        title      = "Heads Up"
     else:
         alert_line = "✅ You're well within budget."
-        emoji = "✅"
-        title = "On Track"
+        emoji      = "✅"
+        title      = "On Track"
 
     response = (
         f"{emoji} {title}\n\n"
@@ -1383,23 +1663,18 @@ def handle_check_budget(uid, cur):
         f"  Remaining:  Rs.{max(0, remaining):.2f}\n"
         f"  Days left:  {days_left} days\n"
     )
-
     if pct < 100:
         response += f"  Daily left: Rs.{max(0, daily_left):.2f}/day\n"
-
     response += f"\n{alert_line}\n"
 
     if top_cat:
         response += f"\n💡 Top category: {top_cat} (Rs.{top_amt:.0f})"
-        if pct >= 75:
-            response += f" — cut this first."
-        else:
-            response += "."
+        response += " — cut this first." if pct >= 75 else "."
 
     days_elapsed = max(1, today.day)
-    if days_elapsed > 0 and month_spent > 0:
-        projected = (month_spent / days_elapsed) * 30
-        response += f"\n📊 Projected month-end spend: Rs.{projected:.0f}"
+    if month_spent > 0:
+        projected  = (month_spent / days_elapsed) * 30
+        response  += f"\n📈 Projected month-end spend: Rs.{projected:.0f}"
         if projected > limit:
             response += f" (Rs.{projected - limit:.0f} over budget at this rate)"
 
@@ -1433,18 +1708,18 @@ def handle_set_budget(text, uid, cur, conn):
 
     conn.commit()
 
-    today = date_type.today()
-    start = str(today.replace(day=1))
+    today       = date_type.today()
+    start       = str(today.replace(day=1))
     month_spent = _get_month_spent(uid, cur, start)
-    pct = (month_spent / amount * 100) if amount > 0 else 0
+    pct         = (month_spent / amount * 100) if amount > 0 else 0
 
     msg += f"\n\nThis month so far: Rs.{month_spent:.2f} ({pct:.1f}% used)."
     if pct >= 90:
         msg += "\n🔴 Critical — almost all of this budget is already used!"
     elif pct >= 75:
-        msg += "\n🟠 Warning — 75%+ already used this month."
+        msg += "\n🟡 Warning — 75%+ already used this month."
     elif pct >= 50:
-        msg += "\n🟡 Halfway through budget already."
+        msg += "\n🔵 Halfway through budget already."
     else:
         msg += "\n✅ You're well within your new budget."
     return msg
@@ -1460,19 +1735,26 @@ def handle_show_expenses(text, uid, cur):
     rows = cur.fetchall()
     if not rows:
         return f"No transactions found for {label}."
-    lines = [f"Transactions — {label}:\n"]
+    lines     = [f"Transactions — {label}:\n"]
+    total_exp = 0
+    total_inc = 0
     for r in rows:
         if isinstance(r, dict):
             sign = "+" if r['type'] == "income" else "-"
-            lines.append(f"  {str(r['date'])}  {r['category']:<14}  {sign}Rs.{float(r['amount']):.2f}")
-            total_exp = sum(float(r['amount']) for r in rows if r['type'] == "expense")
-            total_inc = sum(float(r['amount']) for r in rows if r['type'] == "income")
+            amt  = float(r['amount'])
+            lines.append(f"  {str(r['date'])}  {r['category']:<14}  {sign}Rs.{amt:.2f}")
+            if r['type'] == "expense":
+                total_exp += amt
+            else:
+                total_inc += amt
         else:
             sign = "+" if r[2] == "income" else "-"
-            lines.append(f"  {str(r[0])}  {r[1]:<14}  {sign}Rs.{float(r[3]):.2f}")
-    if not isinstance(rows[0], dict):
-        total_exp = sum(float(r[3]) for r in rows if r[2] == "expense")
-        total_inc = sum(float(r[3]) for r in rows if r[2] == "income")
+            amt  = float(r[3])
+            lines.append(f"  {str(r[0])}  {r[1]:<14}  {sign}Rs.{amt:.2f}")
+            if r[2] == "expense":
+                total_exp += amt
+            else:
+                total_inc += amt
     lines.append(f"\n  Expenses: Rs.{total_exp:.2f}  |  Income: Rs.{total_inc:.2f}")
     if len(rows) == 20:
         lines.append("  (Showing latest 20)")
@@ -1492,7 +1774,7 @@ def handle_spending_analysis(uid, cur):
         return "No expense data this month yet."
     if isinstance(rows[0], dict):
         total_all = float(sum(float(r['total']) for r in rows))
-        lines = ["Spending analysis — this month:\n"]
+        lines     = ["Spending analysis — this month:\n"]
         for i, r in enumerate(rows, 1):
             amt = float(r['total'])
             pct = (amt / total_all * 100) if total_all > 0 else 0
@@ -1501,7 +1783,7 @@ def handle_spending_analysis(uid, cur):
         top_pct = (float(rows[0]['total']) / total_all * 100) if total_all > 0 else 0
     else:
         total_all = float(sum(float(r[1]) for r in rows))
-        lines = ["Spending analysis — this month:\n"]
+        lines     = ["Spending analysis — this month:\n"]
         for i, r in enumerate(rows, 1):
             amt = float(r[1])
             pct = (amt / total_all * 100) if total_all > 0 else 0
@@ -1518,7 +1800,7 @@ def handle_spending_analysis(uid, cur):
 
 
 def handle_savings_info(uid, cur):
-    today = date_type.today()
+    today       = date_type.today()
     start_month = str(today.replace(day=1))
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
@@ -1527,11 +1809,13 @@ def handle_savings_info(uid, cur):
     """, (uid, start_month))
     row = cur.fetchone()
     if isinstance(row, dict):
-        vals = list(row.values()); earned, spent = float(vals[0]), float(vals[1])
+        vals = list(row.values())
+        earned, spent = float(vals[0]), float(vals[1])
     else:
         earned, spent = float(row[0]), float(row[1])
     saved = earned - spent
-    rate = (saved / earned * 100) if earned > 0 else 0
+    rate  = (saved / earned * 100) if earned > 0 else 0
+
     start_3m = str(today - timedelta(days=90))
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
@@ -1540,9 +1824,13 @@ def handle_savings_info(uid, cur):
     """, (uid, start_3m))
     r3 = cur.fetchone()
     if isinstance(r3, dict):
-        v3 = list(r3.values()); avg_save_3m = (float(v3[0]) - float(v3[1])) / 3
+        v3 = list(r3.values())
+        avg_save_3m = (float(v3[0]) - float(v3[1])) / 3
     else:
         avg_save_3m = (float(r3[0]) - float(r3[1])) / 3
+    # FIX: clamp to 0 so negative avg doesn't mislead wishlist messages
+    avg_save_3m = max(0.0, avg_save_3m)
+
     reply = (
         f"Savings summary:\n\n"
         f"  Earned this month:   Rs.{earned:.2f}\n"
@@ -1558,11 +1846,12 @@ def handle_savings_info(uid, cur):
         if top_cat:
             reply += f"\n💡 Try cutting {top_cat} spending (Rs.{top_amt:.0f}) to save more."
     elif rate >= 30:
-        reply += "\n🌟 Excellent saving rate — above 30%! Keep it up!"
+        reply += "\n🎯 Excellent saving rate — above 30%! Keep it up!"
     else:
         reply += f"\n💡 Aim for 20-30% savings rate. You're at {rate:.1f}%."
+
     cur.execute("SELECT COUNT(*) FROM wishlist WHERE user_id=%s", (uid,))
-    wl_row = cur.fetchone()
+    wl_row   = cur.fetchone()
     wl_count = int(list(wl_row.values())[0]) if isinstance(wl_row, dict) else int(wl_row[0])
     if wl_count > 0 and avg_save_3m > 0:
         reply += f"\n\n📋 You have {wl_count} wishlist goal(s). Ask 'Show my wishlist' for progress."
@@ -1574,46 +1863,45 @@ def handle_savings_goal(text, uid, cur):
     if not target_amount:
         return handle_savings_info(uid, cur)
 
-    today = date_type.today()
-    start_month = str(today.replace(day=1))
+    today        = date_type.today()
+    start_month  = str(today.replace(day=1))
     days_in_month = 30
-    days_left = max(1, days_in_month - today.day)
+    days_left    = max(1, days_in_month - today.day)
 
     cur.execute("""
-        SELECT
-          IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END),0),
-          IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0)
-        FROM expenses
-        WHERE user_id=%s AND status='confirmed' AND date >= %s
+        SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
+               IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0)
+        FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
     """, (uid, start_month))
     row = cur.fetchone()
     if isinstance(row, dict):
-        v = list(row.values()); income, spent = float(v[0]), float(v[1])
+        v = list(row.values())
+        income, spent = float(v[0]), float(v[1])
     else:
         income, spent = float(row[0]), float(row[1])
     current_savings = income - spent
 
     start_3m = str(today - timedelta(days=90))
     cur.execute("""
-        SELECT
-          IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END),0),
-          IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0)
+        SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
+               IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0)
         FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
     """, (uid, start_3m))
     r3 = cur.fetchone()
     if isinstance(r3, dict):
-        v3 = list(r3.values()); avg_monthly_savings = max(0.0, (float(v3[0]) - float(v3[1])) / 3)
+        v3 = list(r3.values())
+        avg_monthly_savings = max(0.0, (float(v3[0]) - float(v3[1])) / 3)
     else:
         avg_monthly_savings = max(0.0, (float(r3[0]) - float(r3[1])) / 3)
 
     cur.execute("""
-        SELECT category, SUM(amount) as total FROM expenses
+        SELECT category, SUM(amount) AS total FROM expenses
         WHERE user_id=%s AND type='expense' AND status='confirmed' AND date >= %s
         GROUP BY category ORDER BY total DESC LIMIT 3
     """, (uid, start_month))
     top_cats = cur.fetchall()
 
-    still_needed = max(0, target_amount - current_savings)
+    still_needed        = max(0, target_amount - current_savings)
     daily_spend_allowed = (income - target_amount) / days_in_month if income > 0 else 0
 
     reply = [f"Savings Goal: Rs.{target_amount:.0f}\n"]
@@ -1646,7 +1934,7 @@ def handle_savings_goal(text, uid, cur):
     else:
         reply.append(f"To reach Rs.{target_amount:.0f} by month end:")
         reply.append(f"  • Spend max Rs.{max(0, daily_spend_allowed):.0f}/day for rest of month")
-        reply.append(f"  • Save Rs.{still_needed/days_left:.0f}/day from now\n")
+        reply.append(f"  • Save Rs.{still_needed / days_left:.0f}/day from now\n")
 
     if top_cats and still_needed > 0:
         reply.append("Where you can cut:")
@@ -1655,11 +1943,12 @@ def handle_savings_goal(text, uid, cur):
                 cat, cat_amt = cat_row['category'], float(cat_row['total'])
             else:
                 cat, cat_amt = cat_row[0], float(cat_row[1])
-            reply.append(f"  • {cat} (Rs.{cat_amt:.0f}) — 20% cut saves Rs.{cat_amt*0.2:.0f}")
-        if isinstance(top_cats[0], dict):
-            total_saveable = sum(float(r['total']) * 0.2 for r in top_cats)
-        else:
-            total_saveable = sum(float(r[1]) * 0.2 for r in top_cats)
+            reply.append(f"  • {cat} (Rs.{cat_amt:.0f}) — 20% cut saves Rs.{cat_amt * 0.2:.0f}")
+        total_saveable = (
+            sum(float(r['total']) * 0.2 for r in top_cats)
+            if isinstance(top_cats[0], dict)
+            else sum(float(r[1]) * 0.2 for r in top_cats)
+        )
         reply.append("")
         if total_saveable >= still_needed:
             reply.append(f"Cutting 20% from top 3 categories saves Rs.{total_saveable:.0f} — enough!")
@@ -1671,7 +1960,7 @@ def handle_savings_goal(text, uid, cur):
 
 
 def handle_compare(uid, cur):
-    today = date_type.today()
+    today      = date_type.today()
     start_this = str(today.replace(day=1))
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0),
@@ -1680,10 +1969,12 @@ def handle_compare(uid, cur):
     """, (uid, start_this))
     this = cur.fetchone()
     if isinstance(this, dict):
-        v = list(this.values()); this_exp, this_inc = float(v[0]), float(v[1])
+        v = list(this.values())
+        this_exp, this_inc = float(v[0]), float(v[1])
     else:
         this_exp, this_inc = float(this[0]), float(this[1])
-    last_end = today.replace(day=1) - timedelta(days=1)
+
+    last_end   = today.replace(day=1) - timedelta(days=1)
     last_start = last_end.replace(day=1)
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0),
@@ -1692,783 +1983,386 @@ def handle_compare(uid, cur):
     """, (uid, str(last_start), str(last_end)))
     last = cur.fetchone()
     if isinstance(last, dict):
-        v = list(last.values()); last_exp, last_inc = float(v[0]), float(v[1])
+        v = list(last.values())
+        last_exp, last_inc = float(v[0]), float(v[1])
     else:
         last_exp, last_inc = float(last[0]), float(last[1])
-    diff = this_exp - last_exp
-    pct = (diff / last_exp * 100) if last_exp > 0 else 0
+
+    diff  = this_exp - last_exp
+    pct   = (diff / last_exp * 100) if last_exp > 0 else 0
     reply = (
         f"Month comparison:\n\n"
         f"                This Month   Last Month\n"
-        f"  {'─'*36}\n"
+        f"  {'─' * 36}\n"
         f"  Spent:   Rs.{this_exp:>10.2f}  Rs.{last_exp:>10.2f}\n"
         f"  Earned:  Rs.{this_inc:>10.2f}  Rs.{last_inc:>10.2f}\n"
-        f"  Net:     Rs.{this_inc-this_exp:>+10.2f}  Rs.{last_inc-last_exp:>+10.2f}\n\n"
-        f"  Change: Rs.{abs(diff):.2f}  ({abs(pct):.1f}% {'more' if diff > 0 else 'less'})\n"
+        f"  Net:     Rs.{this_inc - this_exp:>+10.2f}  Rs.{last_inc - last_exp:>+10.2f}\n\n"
+        f"  Change: Rs.{abs(diff):.2f} ({abs(pct):.1f}% {'more' if diff > 0 else 'less'} than last month)"
     )
     if diff > 0:
-        top_cat, top_amt = _get_top_category(uid, cur, start_this)
-        reply += f"\n⚠️ Spending up by Rs.{diff:.0f}."
-        if top_cat:
-            reply += f" {top_cat} (Rs.{top_amt:.0f}) is your biggest category this month."
+        reply += f"\n\n⚠️ Spending increased by Rs.{diff:.0f} this month."
+    elif diff < 0:
+        reply += f"\n\n✅ Spending decreased by Rs.{abs(diff):.0f} this month. Great job!"
     else:
-        reply += f"\n✅ Spending down by Rs.{abs(diff):.0f} vs last month. Great job!"
+        reply += "\n\nSpending is the same as last month."
     return reply
 
 
 def handle_wishlist_status(uid, cur):
     cur.execute("""
-        SELECT id, item_name, target_amount, total_saved, COALESCE(previous_saved, 0)
-        FROM wishlist WHERE user_id=%s ORDER BY item_name ASC
+        SELECT item_name, target_amount, total_saved FROM wishlist WHERE user_id=%s
     """, (uid,))
-    rows = cur.fetchall()
-    if not rows:
-        return "You have no wishlist goals yet.\n\nAdd goals from the Wishlist section of the app!"
-
-    cur.execute("SELECT balance FROM users WHERE id=%s", (uid,))
-    bal_row = cur.fetchone()
-    actual_balance = float(bal_row['balance']) if isinstance(bal_row, dict) else float(bal_row[0])
-    cur.execute("""
-        SELECT COALESCE(SUM(total_saved),0) FROM wishlist WHERE user_id=%s
-    """, (uid,))
-    alloc_row = cur.fetchone()
-    total_allocated = float(list(alloc_row.values())[0]) if isinstance(alloc_row, dict) else float(alloc_row[0])
-    spendable = actual_balance - total_allocated
-
-    today = date_type.today()
-    start_3m = str(today - timedelta(days=90))
-    cur.execute("""
-        SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
-               IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0)
-        FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
-    """, (uid, start_3m))
-    r3 = cur.fetchone()
-    if isinstance(r3, dict):
-        v3 = list(r3.values()); monthly_savings = max(0.0, (float(v3[0]) - float(v3[1])) / 3)
-    else:
-        monthly_savings = max(0.0, (float(r3[0]) - float(r3[1])) / 3)
-
-    lines = ["Your Wishlist Goals:\n"]
-    total_needed = 0
-
-    for r in rows:
-        if isinstance(r, dict):
-            wid, name, target, saved, prev_saved = r['id'], r['item_name'], float(r['target_amount']), float(r['total_saved']), float(r.get('previous_saved') or 0)
+    items = cur.fetchall()
+    if not items:
+        return "You have no wishlist goals yet. Add one from the Wishlist section!"
+    lines = ["Your Wishlist Goals 🎯\n"]
+    for item in items:
+        if isinstance(item, dict):
+            name, target, saved = item['item_name'], float(item['target_amount']), float(item['total_saved'])
         else:
-            wid, name, target, saved, prev_saved = r[0], r[1], float(r[2]), float(r[3]), float(r[4])
-        remaining = max(0.0, target - saved)
-        pct = min(100.0, (saved / target * 100)) if target > 0 else 0
-        total_needed += remaining
-
-        filled = min(int(pct / 10), 10)
-        bar = "█" * filled + "░" * (10 - filled)
-
-        if remaining <= 0:
-            eta = "Done!"
-        elif monthly_savings > 0:
-            mo = remaining / monthly_savings
-            eta = f"~{mo:.1f} months at current savings rate"
-        else:
-            eta = "N/A (no savings history)"
-
-        icon = "✅" if saved >= target else "⏳"
-
-        lines.append(f"  {icon} {name}")
-        lines.append(f"     [{bar}]  {pct:.0f}%")
-        lines.append(f"     Saved: Rs.{saved:.0f}  /  Target: Rs.{target:.0f}")
-        if remaining > 0:
-            lines.append(f"     Still need: Rs.{remaining:.0f}")
-            lines.append(f"     ETA: {eta}")
-        else:
-            lines.append(f"     🎉 Goal reached!")
-        if prev_saved > 0:
-            lines.append(f"     ⚠️ Reset triggered (prev saved: Rs.{prev_saved:.0f}) — re-save when balance allows.")
-        lines.append("")
-
-    lines.append(f"  Total remaining across all goals: Rs.{total_needed:.0f}")
-    lines.append(f"  Spendable balance (after allocations): Rs.{spendable:.0f}")
-    if monthly_savings > 0 and total_needed > 0:
-        all_done_in = total_needed / monthly_savings
-        lines.append(f"  All goals complete in ~{all_done_in:.1f} months at current savings rate.")
-    elif monthly_savings == 0 and total_needed > 0:
-        lines.append(f"  ⚠️ No savings history — add income records to see timelines.")
+            name, target, saved = item[0], float(item[1]), float(item[2])
+        pct       = (saved / target * 100) if target > 0 else 0
+        remaining = max(0, target - saved)
+        filled    = min(int(pct / 10), 10)
+        bar       = '█' * filled + '░' * (10 - filled)
+        lines.append(f"  {name}")
+        lines.append(f"  [{bar}] {pct:.0f}%")
+        lines.append(f"  Saved: Rs.{saved:.0f} / Rs.{target:.0f}  (Rs.{remaining:.0f} left)\n")
     return "\n".join(lines)
 
 
-def handle_wishlist_timeline(text, uid, cur):
+def handle_wishlist_timeline(uid, cur):
     cur.execute("""
-        SELECT id, item_name, target_amount, total_saved
-        FROM wishlist WHERE user_id=%s ORDER BY item_name ASC
+        SELECT item_name, target_amount, total_saved FROM wishlist WHERE user_id=%s
     """, (uid,))
-    rows = cur.fetchall()
-    if not rows:
-        return "No wishlist goals found. Add some from the Wishlist section of the app!"
+    items = cur.fetchall()
+    if not items:
+        return "No wishlist goals found. Add goals from the Wishlist section!"
 
-    tl = text.lower()
-
-    matched = None
-    for r in rows:
-        name = r['item_name'] if isinstance(r, dict) else r[1]
-        item_words = name.lower().split()
-        if name.lower() in tl or any(w in tl for w in item_words if len(w) > 3):
-            matched = r
-            break
-
-    today = date_type.today()
+    today    = date_type.today()
     start_3m = str(today - timedelta(days=90))
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
                IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0)
         FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
     """, (uid, start_3m))
-    r3 = cur.fetchone()
-    if isinstance(r3, dict):
-        v3 = list(r3.values()); monthly_savings = max(0.0, (float(v3[0]) - float(v3[1])) / 3.0)
+    r = cur.fetchone()
+    if isinstance(r, dict):
+        v = list(r.values())
+        avg_save = max(0.0, (float(v[0]) - float(v[1])) / 3)
     else:
-        monthly_savings = max(0.0, (float(r3[0]) - float(r3[1])) / 3.0)
+        avg_save = max(0.0, (float(r[0]) - float(r[1])) / 3)
 
-    cur.execute("""
-        SELECT wishlist_id, COALESCE(SUM(amount),0) as this_month
-        FROM wishlist_savings
-        WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
-        GROUP BY wishlist_id
-    """, (uid,))
-    monthly_contrib_rows = cur.fetchall()
-    monthly_contrib = {}
-    for mc in monthly_contrib_rows:
-        if isinstance(mc, dict):
-            monthly_contrib[mc['wishlist_id']] = float(mc['this_month'])
-        else:
-            monthly_contrib[mc[0]] = float(mc[1])
-
-    if matched:
-        if isinstance(matched, dict):
-            wid, name, target, saved = matched['id'], matched['item_name'], float(matched['target_amount']), float(matched['total_saved'])
-        else:
-            wid, name, target, saved = matched[0], matched[1], float(matched[2]), float(matched[3])
-        remaining = max(0.0, target - saved)
-        pct = min(100.0, (saved / target * 100)) if target > 0 else 0
-        this_month_saved = monthly_contrib.get(wid, 0.0)
-
-        filled = min(int(pct / 10), 10)
-        bar = "█" * filled + "░" * (10 - filled)
-
-        if remaining <= 0:
-            return (
-                f"🎉 Goal complete: {name}\n\n"
-                f"  [{bar}]  100%\n"
-                f"  Target: Rs.{target:.0f}  |  Saved: Rs.{saved:.0f}\n\n"
-                f"You've reached this goal! Well done!"
-            )
-
-        reply = (
-            f"Goal: {name}\n\n"
-            f"  [{bar}]  {pct:.0f}%\n\n"
-            f"  Target:           Rs.{target:.0f}\n"
-            f"  Already saved:    Rs.{saved:.0f}\n"
-            f"  Still needed:     Rs.{remaining:.0f}\n"
-            f"  Saved this month: Rs.{this_month_saved:.0f}\n"
-        )
-
-        if monthly_savings <= 0:
-            reply += (
-                f"\n⚠️ No savings history yet.\n"
-                f"Start saving regularly to see your timeline."
-            )
-        else:
-            months_needed = remaining / monthly_savings
-            reply += f"  ETA (at Rs.{monthly_savings:.0f}/mo): ~{months_needed:.1f} months\n"
-            reply += f"\nTo finish in:"
-            for target_months in [3, 6, 12]:
-                needed_per_month = remaining / target_months
-                reply += f"\n  • {target_months} months → save Rs.{needed_per_month:.0f}/month"
-
-        return reply
-
-    else:
-        if monthly_savings <= 0:
-            lines = ["Wishlist Timelines:\n",
-                     "⚠️ No savings history found.\n",
-                     "Add income to your tracker to calculate timelines.\n"]
-        else:
-            lines = [f"Wishlist Timelines (saving Rs.{monthly_savings:.0f}/mo avg):\n"]
-
-        for r in rows:
-            if isinstance(r, dict):
-                wid, name, target, saved = r['id'], r['item_name'], float(r['target_amount']), float(r['total_saved'])
-            else:
-                wid, name, target, saved = r[0], r[1], float(r[2]), float(r[3])
-            remaining = max(0.0, target - saved)
-            pct = min(100.0, (saved / target * 100)) if target > 0 else 0
-            filled = min(int(pct / 10), 10)
-            bar = "█" * filled + "░" * (10 - filled)
-
-            if remaining <= 0:
-                lines.append(f"  ✅ {name} — Done!")
-                continue
-
-            this_month_saved = monthly_contrib.get(wid, 0.0)
-            if monthly_savings > 0:
-                mo = remaining / monthly_savings
-                lines.append(f"  ⏳ {name}")
-                lines.append(f"     [{bar}]  {pct:.0f}%  (Rs.{saved:.0f} / Rs.{target:.0f})")
-                lines.append(f"     Still need: Rs.{remaining:.0f}  →  ~{mo:.1f} months")
-                if this_month_saved > 0:
-                    lines.append(f"     Saved this month: Rs.{this_month_saved:.0f}")
-            else:
-                lines.append(f"  ⏳ {name}  —  Rs.{saved:.0f} / Rs.{target:.0f}  (Rs.{remaining:.0f} more needed)")
-            lines.append("")
-
+    lines = ["Wishlist Timeline 📅\n"]
+    if avg_save <= 0:
+        lines.append("No savings data to estimate timelines.")
+        lines.append("Add income and keep expenses low to see projections.")
         return "\n".join(lines)
+
+    for item in items:
+        if isinstance(item, dict):
+            name, target, saved = item['item_name'], float(item['target_amount']), float(item['total_saved'])
+        else:
+            name, target, saved = item[0], float(item[1]), float(item[2])
+        remaining = max(0, target - saved)
+        if remaining <= 0:
+            lines.append(f"  ✅ {name} — Goal reached!")
+        else:
+            months_needed = remaining / avg_save
+            lines.append(f"  🎯 {name}")
+            lines.append(f"     Need Rs.{remaining:.0f} more")
+            lines.append(f"     At Rs.{avg_save:.0f}/month → ~{months_needed:.1f} months")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def handle_wishlist_item_progress(text, uid, cur):
     cur.execute("""
-        SELECT id, item_name, target_amount, total_saved, COALESCE(previous_saved, 0)
-        FROM wishlist WHERE user_id=%s
+        SELECT item_name, target_amount, total_saved FROM wishlist WHERE user_id=%s
     """, (uid,))
-    rows = cur.fetchall()
-    if not rows:
-        return "You have no wishlist goals yet.\n\nAdd some from the Wishlist section!"
-
-    tl = text.lower()
-
+    items = cur.fetchall()
+    if not items:
+        return "No wishlist goals found."
+    tl      = text.lower()
     matched = None
-    best_score = 0
-    for r in rows:
-        name = r['item_name'] if isinstance(r, dict) else r[1]
-        words = name.lower().split()
-        score = sum(1 for w in words if len(w) > 3 and w in tl)
+    for item in items:
+        name = item['item_name'] if isinstance(item, dict) else item[0]
         if name.lower() in tl:
-            score += 5
-        if score > best_score:
-            best_score = score
-            matched = r
+            matched = item
+            break
+    if not matched:
+        for kw in WISHLIST_ITEM_KEYWORDS:
+            if kw in tl:
+                for item in items:
+                    name = item['item_name'] if isinstance(item, dict) else item[0]
+                    if kw in name.lower():
+                        matched = item
+                        break
+            if matched:
+                break
+    if not matched:
+        return handle_wishlist_status(uid, cur)
+    if isinstance(matched, dict):
+        name, target, saved = matched['item_name'], float(matched['target_amount']), float(matched['total_saved'])
+    else:
+        name, target, saved = matched[0], float(matched[1]), float(matched[2])
+    remaining = max(0, target - saved)
+    pct       = (saved / target * 100) if target > 0 else 0
+    filled    = min(int(pct / 10), 10)
+    bar       = '█' * filled + '░' * (10 - filled)
+    return (
+        f"Progress for {name}:\n\n"
+        f"  [{bar}] {pct:.0f}%\n\n"
+        f"  Target:    Rs.{target:.0f}\n"
+        f"  Saved:     Rs.{saved:.0f}\n"
+        f"  Remaining: Rs.{remaining:.0f}\n"
+    )
 
+
+def handle_financial_advice(text, uid, cur):
     today = date_type.today()
-    start_3m = str(today - timedelta(days=90))
+    start = str(today.replace(day=1))
     cur.execute("""
         SELECT IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END), 0),
                IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0)
         FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
-    """, (uid, start_3m))
-    r3 = cur.fetchone()
-    if isinstance(r3, dict):
-        v3 = list(r3.values()); monthly_savings = max(0.0, (float(v3[0]) - float(v3[1])) / 3.0)
-    else:
-        monthly_savings = max(0.0, (float(r3[0]) - float(r3[1])) / 3.0)
-
-    if not matched or best_score == 0:
-        return handle_wishlist_status(uid, cur)
-
-    if isinstance(matched, dict):
-        wid, name, target, saved, prev_saved = matched['id'], matched['item_name'], float(matched['target_amount']), float(matched['total_saved']), float(matched.get('previous_saved') or 0)
-    else:
-        wid, name, target, saved, prev_saved = matched[0], matched[1], float(matched[2]), float(matched[3]), float(matched[4])
-
-    remaining  = max(0.0, target - saved)
-    pct        = min(100.0, (saved / target * 100)) if target > 0 else 0
-    filled     = min(int(pct / 10), 10)
-    bar        = "█" * filled + "░" * (10 - filled)
-
-    cur.execute("""
-        SELECT COALESCE(SUM(amount),0)
-        FROM wishlist_savings
-        WHERE wishlist_id=%s AND user_id=%s
-          AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
-    """, (wid, uid))
-    tm_row = cur.fetchone()
-    this_month = float(list(tm_row.values())[0]) if isinstance(tm_row, dict) else float(tm_row[0])
-
-    cur.execute("""
-        SELECT month, year, SUM(amount) as amt
-        FROM wishlist_savings
-        WHERE wishlist_id=%s AND user_id=%s
-        GROUP BY year, month ORDER BY year DESC, month DESC LIMIT 6
-    """, (wid, uid))
-    history = cur.fetchall()
-
-    if remaining <= 0:
-        return (
-            f"🎉 Goal complete: {name}\n\n"
-            f"  [{bar}]  100%\n"
-            f"  Target: Rs.{target:.0f}  |  Saved: Rs.{saved:.0f}\n\n"
-            f"You\'ve fully funded this goal — well done!"
-        )
-
-    reply = (
-        f"📊 Progress: {name}\n\n"
-        f"  [{bar}]  {pct:.1f}%\n\n"
-        f"  Target:           Rs.{target:.0f}\n"
-        f"  Saved so far:     Rs.{saved:.0f}\n"
-        f"  Still needed:     Rs.{remaining:.0f}\n"
-        f"  Saved this month: Rs.{this_month:.0f}\n"
-    )
-
-    if prev_saved > 0:
-        reply += f"  ⚠️ Reset pending: Rs.{prev_saved:.0f} previously saved (balance was insufficient)\n"
-
-    if monthly_savings > 0:
-        months_needed = remaining / monthly_savings
-        reply += f"\n  ETA (at Rs.{monthly_savings:.0f}/mo): ~{months_needed:.1f} months\n"
-        reply += f"\nTo complete faster:"
-        for mo in [1, 3, 6]:
-            reply += f"\n  • {mo} month{'s' if mo>1 else ''}  → save Rs.{remaining/mo:.0f}/month"
-    else:
-        reply += "\n⚠️ No income/savings history. Add income to see your timeline."
-
-    if history:
-        reply += "\n\nSavings history (last 6 months):"
-        month_names = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-        for row in history:
-            if isinstance(row, dict):
-                mo, yr, amt = row['month'], row['year'], float(row['amt'])
-            else:
-                mo, yr, amt = row[0], row[1], float(row[2])
-            reply += f"\n  • {month_names[mo]} {yr}: Rs.{amt:.0f}"
-
-    return reply
-
-
-def handle_financial_advice(uid, cur):
-    today = date_type.today()
-    start = str(today.replace(day=1))
-    cur.execute("""
-        SELECT IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0),
-               IFNULL(SUM(CASE WHEN type='income'  THEN amount ELSE 0 END),0)
-        FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
     """, (uid, start))
     row = cur.fetchone()
     if isinstance(row, dict):
-        v = list(row.values()); spent, income = float(v[0]), float(v[1])
+        v = list(row.values())
+        income, spent = float(v[0]), float(v[1])
     else:
-        spent, income = float(row[0]), float(row[1])
-    savings = income - spent
-    rate = (savings / income * 100) if income > 0 else 0
+        income, spent = float(row[0]), float(row[1])
+    saved = income - spent
+    rate  = (saved / income * 100) if income > 0 else 0
+
+    advice = ["💡 Financial Tips for You:\n"]
+
+    if income > 0:
+        needs           = income * 0.50
+        wants           = income * 0.30
+        savings_target  = income * 0.20
+        advice.append(f"50/30/20 Rule for your income (Rs.{income:.0f}):")
+        advice.append(f"  • Needs (50%):   Rs.{needs:.0f}")
+        advice.append(f"  • Wants (30%):   Rs.{wants:.0f}")
+        advice.append(f"  • Savings (20%): Rs.{savings_target:.0f}\n")
+
     top_cat, top_amt = _get_top_category(uid, cur, start)
-    advice = ["Financial Advice:\n"]
-    if income == 0:
-        advice.append(
-            "No income recorded this month.\n"
-            "Add your salary/income to get personalised advice.\n\n"
-            "General tips:\n"
-            "  • Track every expense, even small ones\n"
-            "  • Set a monthly budget\n"
-            "  • Aim to save at least 20% of income"
-        )
-        return "\n".join(advice)
-    if rate < 10:
-        advice.append(f"⚠️ Savings rate: {rate:.1f}% — quite low.")
-        advice.append("Cut down non-essential expenses this month.")
-    elif rate < 20:
-        advice.append(f"💡 Savings rate: {rate:.1f}% — moderate.")
-        advice.append("Push towards 20% for better financial health.")
-    else:
-        advice.append(f"✅ Savings rate: {rate:.1f}% — strong! Keep it up.")
     if top_cat:
-        advice.append(
-            f"\nBiggest spend: {top_cat} (Rs.{top_amt:.0f})\n"
-            f"Cutting it 20% saves Rs.{top_amt * 0.2:.0f} extra/month."
-        )
-    needs = income * 0.50
-    wants = income * 0.30
-    target_save = income * 0.20
-    advice.append(
-        f"\n50/30/20 rule for Rs.{income:.0f} income:\n"
-        f"  50% Needs:   Rs.{needs:.0f}\n"
-        f"  30% Wants:   Rs.{wants:.0f}\n"
-        f"  20% Savings: Rs.{target_save:.0f}"
-    )
-    advice.append(
-        "\nQuick wins:\n"
-        "  • Cancel unused subscriptions\n"
-        "  • Pack lunch 2-3 days/week\n"
-        "  • Use UPI cashbacks & offers\n"
-        "  • Review your top category monthly"
-    )
+        advice.append(f"Your top spend is {top_cat} (Rs.{top_amt:.0f}).")
+        advice.append(f"  → A 20% cut saves Rs.{top_amt * 0.2:.0f}/month\n")
+
+    advice.append("General tips:")
+    advice.append("  • Track every expense — awareness reduces spending")
+    advice.append("  • Set category limits to avoid overspending")
+    advice.append("  • Pay yourself first — move savings before spending")
+    advice.append("  • Build an emergency fund of 3-6 months expenses")
+    advice.append("  • Review subscriptions monthly — cancel unused ones")
+
+    if rate < 10 and income > 0:
+        advice.append(f"\n⚠️ Your savings rate is only {rate:.0f}%. Aim for at least 20%.")
+    elif rate >= 20:
+        advice.append(f"\n✅ Great savings rate of {rate:.0f}%! Consider investing the surplus.")
+
     return "\n".join(advice)
 
 
 def handle_purchase_advice(text, uid, cur):
     amount = extract_amount(text)
     if not amount:
-        return "Tell me the price.\nExample: 'Can I afford a phone for 15000?'"
-
+        return "Please mention the purchase amount.\nExample: 'Can I afford a laptop for 50000?'"
     cur.execute("SELECT balance FROM users WHERE id=%s", (uid,))
-    bal_row = cur.fetchone()
-    balance = float(bal_row['balance']) if isinstance(bal_row, dict) else float(bal_row[0])
-    today = date_type.today()
-    start = str(today.replace(day=1))
+    row     = cur.fetchone()
+    balance = float(row['balance']) if isinstance(row, dict) else float(row[0])
+
+    today       = date_type.today()
+    start       = str(today.replace(day=1))
     month_spent = _get_month_spent(uid, cur, start)
-    budget = _get_budget_this_month(cur, uid)
-    remaining_budget = (budget - month_spent) if budget is not None else None
+    limit       = _get_budget_this_month(cur, uid)
 
-    cur.execute("SELECT COALESCE(SUM(total_saved),0) FROM wishlist WHERE user_id=%s", (uid,))
-    wl_row = cur.fetchone()
-    wl_allocated = float(list(wl_row.values())[0]) if isinstance(wl_row, dict) else float(wl_row[0])
-    spendable = max(0.0, balance - wl_allocated)
-
-    cur.execute("""
-        SELECT IFNULL(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0),
-               IFNULL(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0)
-        FROM expenses WHERE user_id=%s AND status='confirmed' AND date >= %s
-    """, (uid, str(today - timedelta(days=90))))
-    r = cur.fetchone()
-    if isinstance(r, dict):
-        v = list(r.values()); avg_monthly_savings = max(0.0, (float(v[0]) - float(v[1])) / 3)
+    lines = [f"Purchase Advice: Rs.{amount:.0f}\n"]
+    lines.append(f"  Current balance:  Rs.{balance:.2f}")
+    lines.append(f"  This month spent: Rs.{month_spent:.2f}")
+    if limit:
+        budget_left = max(0, limit - month_spent)
+        lines.append(f"  Budget remaining: Rs.{budget_left:.2f}\n")
     else:
-        avg_monthly_savings = max(0.0, (float(r[0]) - float(r[1])) / 3)
+        lines.append("")
 
-    cur.execute("""
-        SELECT id, item_name, target_amount, total_saved
-        FROM wishlist WHERE user_id=%s
-    """, (uid,))
-    wl_rows = cur.fetchall()
+    after_purchase = balance - amount
+    if after_purchase < 0:
+        lines.append(f"❌ Cannot afford — would leave you Rs.{abs(after_purchase):.0f} short.")
+    elif after_purchase < balance * 0.20:
+        lines.append(f"⚠️ Risky — only Rs.{after_purchase:.0f} left after purchase (under 20% of balance).")
+        lines.append("   Consider waiting or saving more first.")
+    elif limit and amount > (limit - month_spent):
+        lines.append(f"🟡 Affordable but exceeds remaining budget (Rs.{limit - month_spent:.0f}).")
+        lines.append("   You may go over budget this month.")
+    else:
+        lines.append(f"✅ You can afford this! Rs.{after_purchase:.0f} left after purchase.")
 
-    tl = text.lower()
-    stopwords = {"should","would","could","will","want","need","buy","get","afford",
-                 "purchase","spend","money","much","that","this","for","the","and"}
-    query_words = [w for w in re.findall(r'[a-z]+', tl) if len(w) > 3 and w not in stopwords]
-
-    best_item = None
-    best_score = 0
-    for row in wl_rows:
-        if isinstance(row, dict):
-            wid, name, target, saved = row['id'], row['item_name'], float(row['target_amount']), float(row['total_saved'])
-        else:
-            wid, name, target, saved = row[0], row[1], float(row[2]), float(row[3])
-        name_lower = name.lower()
-        score = sum(1 for w in query_words if w in name_lower)
-        for nw in re.findall(r'[a-z]+', name_lower):
-            if len(nw) > 3 and nw in tl:
-                score += 2
-        if score > best_score:
-            best_score = score
-            best_item = (wid, name, float(target), float(saved))
-
-    if best_item and best_score >= 2:
-        wid, goal_name, goal_target, goal_saved = best_item
-        goal_remaining = max(0.0, goal_target - goal_saved)
-        pct = min(100.0, (goal_saved / goal_target * 100)) if goal_target > 0 else 0
-        filled = min(int(pct / 10), 10)
-        bar = "█" * filled + "░" * (10 - filled)
-
-        cur.execute("""
-            SELECT COALESCE(SUM(amount),0) FROM wishlist_savings
-            WHERE wishlist_id=%s AND user_id=%s
-            AND MONTH(CURDATE())-month BETWEEN 0 AND 2
-        """, (wid, uid))
-        gs_row = cur.fetchone()
-        goal_monthly_save = float(list(gs_row.values())[0]) if isinstance(gs_row, dict) else float(gs_row[0])
-        goal_monthly_save = goal_monthly_save / 3 if avg_monthly_savings > 0 else 0
-        if goal_monthly_save <= 0:
-            goal_monthly_save = avg_monthly_savings
-
-        eta_months = (goal_remaining / goal_monthly_save) if goal_monthly_save > 0 else None
-
-        lines = []
-        lines.append(f"Your {goal_name} goal is Rs.{goal_target:.0f} and you have saved Rs.{goal_saved:.0f}.")
-        lines.append(f"  [{bar}]  {pct:.0f}% complete\n")
-
-        if amount >= goal_target:
-            lines.append(f"Buying a {goal_name.lower()} now for Rs.{amount:.0f} would use your entire goal budget.")
-            lines.append(f"You would need to start saving from scratch (Rs.{goal_target:.0f} target).\n")
-        elif amount > goal_saved:
-            delay = (amount - goal_saved) / goal_monthly_save if goal_monthly_save > 0 else None
-            lines.append(f"Buying a {goal_name.lower()} now for Rs.{amount:.0f} would delay your savings goal significantly.")
-            if delay:
-                lines.append(f"It would set you back by roughly {delay:.0f} months of saving.\n")
-            else:
-                lines.append("")
-        else:
-            lines.append(f"Rs.{amount:.0f} is within your current savings of Rs.{goal_saved:.0f} for this goal.")
-            lines.append(f"But it would reduce your progress to {max(0, goal_saved - amount):.0f} / {goal_target:.0f}.\n")
-
-        if goal_monthly_save > 0 and goal_remaining > 0:
-            lines.append(f"If you continue saving Rs.{goal_monthly_save:.0f} per month,")
-            if eta_months:
-                lines.append(f"you can reach your goal in about {eta_months:.0f} months.\n")
-        elif goal_remaining <= 0:
-            lines.append("You have already reached your savings goal! 🎉\n")
-
-        if amount > spendable:
-            lines.append("Recommendation: You don't have enough spendable balance right now.")
-            lines.append("Keep saving and revisit this in a few months.")
-        elif pct >= 80:
-            lines.append("Recommendation: You're very close to your goal — wait a little longer!")
-        elif goal_monthly_save > 0 and eta_months and eta_months <= 6:
-            lines.append(f"Recommendation: Continue saving for a few months instead.")
-            lines.append(f"You'll hit your goal in ~{eta_months:.0f} months.")
-        else:
-            lines.append("Recommendation: Consider saving more aggressively to reach your goal sooner.")
-
-        return "\n".join(lines)
-
-    if amount > spendable:
-        months_needed = ((amount - spendable) / avg_monthly_savings) if avg_monthly_savings > 0 else 0
-        response = (
-            f"⚠️ Not affordable right now.\n\n"
-            f"  Item price:       Rs.{amount:.0f}\n"
-            f"  Spendable bal.:   Rs.{spendable:.0f}\n"
-            f"  (Balance Rs.{balance:.0f}, Rs.{wl_allocated:.0f} in wishlist goals)\n"
-            f"  Shortfall:        Rs.{amount - spendable:.0f}\n\n"
-        )
-        if months_needed > 0:
-            response += f"At your savings rate, you could afford it in ~{months_needed:.1f} months."
-        else:
-            response += "Start saving regularly to reach this goal."
-        return response
-
-    if remaining_budget is not None and amount > remaining_budget:
-        return (
-            f"⚠️ Exceeds remaining budget.\n\n"
-            f"  Item price:       Rs.{amount:.0f}\n"
-            f"  Budget remaining: Rs.{remaining_budget:.0f}\n\n"
-            f"Consider waiting till next month when budget resets."
-        )
-
-    if amount > balance * 0.4:
-        return (
-            f"💡 Large purchase — think it through.\n\n"
-            f"  Item price: Rs.{amount:.0f}\n"
-            f"  Balance:    Rs.{balance:.0f}\n"
-            f"  That's {(amount/balance*100):.0f}% of your balance.\n\n"
-            f"Keep enough for emergencies (3-6 months expenses)."
-        )
-
-    return (
-        f"✅ You can afford this!\n\n"
-        f"  Item price:         Rs.{amount:.0f}\n"
-        f"  Spendable balance:  Rs.{spendable:.0f}\n"
-        f"  After purchase:     Rs.{spendable - amount:.0f}\n"
-        f"  Month spent:        Rs.{month_spent:.0f}\n\n"
-        f"Keep some emergency savings aside."
-    )
+    return "\n".join(lines)
 
 
 def handle_time_based_query(text, uid, cur):
-    summary = handle_get_total_expense(text, uid, cur)
-    details = handle_show_expenses(text, uid, cur)
-    if "No transactions" in details:
-        return summary
-    return f"{summary}\n\n{details}"
+    return handle_get_total_expense(text, uid, cur)
 
 
-def handle_edit_expense(text, uid, cur, conn):
-    tl = text.lower()
-    if "delete" in tl or "remove" in tl:
-        cat = extract_category(text)
-        if cat and cat.lower() in tl:
-            cur.execute("""
-                SELECT id, amount, type, category FROM expenses
-                WHERE user_id=%s AND LOWER(category)=LOWER(%s) AND status='confirmed'
-                ORDER BY date DESC, time DESC LIMIT 1
-            """, (uid, cat))
-        else:
-            cur.execute("""
-                SELECT id, amount, type, category FROM expenses
-                WHERE user_id=%s AND status='confirmed'
-                ORDER BY date DESC, time DESC LIMIT 1
-            """, (uid,))
-        res = cur.fetchone()
-        if not res:
-            return "No matching expense found to delete."
-        if isinstance(res, dict):
-            exp_id, amount, t_type, real_cat = res['id'], float(res['amount']), res['type'], res['category']
-        else:
-            exp_id, amount, t_type, real_cat = res[0], float(res[1]), res[2], res[3]
-        cur.execute("DELETE FROM expenses WHERE id=%s", (exp_id,))
-        adj = amount if t_type == "expense" else -amount
-        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (adj, uid))
-        conn.commit()
-        return f"✅ Deleted: {real_cat} expense of Rs.{amount:.2f}."
-    elif "edit" in tl or "update" in tl:
-        amount = extract_amount(text)
-        cat = extract_category(text)
-        if not amount:
-            return "Specify the new amount.\nExample: 'Edit the food expense to 300'"
-        if cat and cat.lower() in tl:
-            cur.execute("""
-                SELECT id, amount, type, category FROM expenses
-                WHERE user_id=%s AND LOWER(category)=LOWER(%s) AND status='confirmed'
-                ORDER BY date DESC, time DESC LIMIT 1
-            """, (uid, cat))
-        else:
-            cur.execute("""
-                SELECT id, amount, type, category FROM expenses
-                WHERE user_id=%s AND status='confirmed'
-                ORDER BY date DESC, time DESC LIMIT 1
-            """, (uid,))
-        res = cur.fetchone()
-        if not res:
-            return "No matching expense found to edit."
-        if isinstance(res, dict):
-            exp_id, old_amt, t_type, real_cat = res['id'], float(res['amount']), res['type'], res['category']
-        else:
-            exp_id, old_amt, t_type, real_cat = res[0], float(res[1]), res[2], res[3]
-        undo = old_amt if t_type == "expense" else -old_amt
-        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (undo, uid))
-        apply = -amount if t_type == "expense" else amount
-        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (apply, uid))
-        cur.execute("UPDATE expenses SET amount=%s WHERE id=%s", (amount, exp_id))
-        conn.commit()
-        return f"✅ Updated {real_cat}: Rs.{old_amt:.2f} -> Rs.{amount:.2f}."
-    return "Say 'delete last expense' or 'edit food expense to 300'."
-
-
-@app.route('/ai/chat', methods=['POST'])
-def ai_chat():
-    data = request.json or {}
-    uid = data.get('user_id') or (
-        logged_in_user["id"]
-        if 'logged_in_user' in globals() and logged_in_user
-        else None
+def handle_edit_expense(uid, cur):
+    return (
+        "To edit or delete an expense, please use the Expenses section in the app.\n\n"
+        "You can tap any transaction to edit or delete it directly."
     )
-    message = (data.get("message") or "").strip()
 
-    if uid is None:
-        return jsonify({"success": False, "message": "Unauthorized"}), 401
-    if not message:
-        return jsonify({"success": False, "message": "Message is required"}), 400
 
-    print(f"[FinBot] uid={uid} | {message}")
+def handle_add_expense(text, uid, cur, conn):
+    amount = extract_amount(text)
+    if not amount:
+        return "I couldn't find an amount. Try: 'I spent 200 on food'"
+    category   = extract_category(text) or "Other"
+    t_type     = extract_type(text)
+    date_str, date_label = extract_date(text)
+    now        = datetime.now()
 
-    ctx = _ctx(uid)
-    intent = classify_intent(message, ctx)
-    cur = get_cursor()
-    response_text = ""
+    cur.execute(
+        "INSERT INTO expenses(amount, date, time, category, user_id, type, status, entry_method) "
+        "VALUES (%s, %s, %s, %s, %s, %s, 'confirmed', 'chatbot')",
+        (amount, date_str, now.strftime('%H:%M:%S'), category, uid, t_type)
+    )
+    adj = amount if t_type == 'income' else -amount
+    cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (adj, uid))
+    conn.commit()
+
+    cur.execute("SELECT balance FROM users WHERE id=%s", (uid,))
+    row         = cur.fetchone()
+    new_balance = float(row['balance']) if isinstance(row, dict) else float(row[0])
+
+    action = "Income" if t_type == 'income' else "Expense"
+    sign   = "+" if t_type == 'income' else "-"
+    reply  = (
+        f"✅ {action} recorded!\n\n"
+        f"  Amount:   {sign}Rs.{amount:.2f}\n"
+        f"  Category: {category}\n"
+        f"  Date:     {date_label}\n"
+        f"  Balance:  Rs.{new_balance:.2f}"
+    )
+
+    if t_type == 'expense':
+        limit = _get_budget_this_month(cur, uid)
+        if limit:
+            today       = date_type.today()
+            start       = str(today.replace(day=1))
+            month_spent = _get_month_spent(uid, cur, start)
+            pct         = (month_spent / limit * 100) if limit > 0 else 0
+            if pct >= 90:
+                reply += f"\n\n🔴 Budget alert: {pct:.0f}% used this month!"
+            elif pct >= 75:
+                reply += f"\n\n🟡 Budget warning: {pct:.0f}% used this month."
+
+    return reply
+
+
+def handle_follow_up(text, uid, cur, ctx_data):
+    last_intent = ctx_data.get("last_intent")
+    if last_intent in ("GET_TOTAL_EXPENSE", "TIME_BASED_QUERY"):
+        return handle_get_total_expense(text, uid, cur)
+    if last_intent == "CATEGORY_EXPENSE":
+        return handle_category_expense(text, uid, cur)
+    if last_intent == "SHOW_EXPENSES":
+        return handle_show_expenses(text, uid, cur)
+    return handle_get_total_expense(text, uid, cur)
+
+
+# ── CHATBOT ENDPOINT ────────────────────────────────────────
+@app.route('/ai/chat', methods=['POST'])
+def chatbot():
+    data    = request.json
+    user_id = data.get('user_id')
+    message = (data.get('message') or '').strip()
+
+    if not user_id or not message:
+        return jsonify({"success": False, "message": "Missing user_id or message"}), 400
+
+    cur = get_cursor(dictionary=True)
+
+    cur.execute("SELECT username, balance FROM users WHERE id=%s", (user_id,))
+    user_row = cur.fetchone()
+    if not user_row:
+        cur.close()
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    username = user_row['username']
+    balance  = float(user_row['balance'])
+    ctx_data = _ctx(user_id)
+
+    menu = _detect_keyword_menu(message)
+    if menu:
+        cur.close()
+        return jsonify({
+            "success":     True,
+            "response":    menu["prompt"],
+            "suggestions": menu["suggestions"]
+        })
+
+    intent = classify_intent(message, ctx_data)
+    _set_ctx(user_id, intent)
 
     try:
-        cur.execute("SELECT balance, username FROM users WHERE id=%s", (uid,))
-        user_row = cur.fetchone()
-        if not user_row:
-            return jsonify({"success": False, "message": "User not found"}), 404
-
-        balance = float(user_row[0])
-        username = user_row[1]
-
         if intent == "GREETING":
-            response_text = handle_greeting(username, balance, uid, cur)
-
+            reply = handle_greeting(username, balance, user_id, cur)
         elif intent == "ADD_EXPENSE":
-            response_text, ok = handle_add_expense(message, uid, cur, mysql_conn)
-            if ok:
-                cat = extract_category(message) or "Other"
-                _set_ctx(uid, "ADD_EXPENSE", {"category": cat})
-
+            reply = handle_add_expense(message, user_id, cur, mysql_conn)
         elif intent == "GET_TOTAL_EXPENSE":
-            response_text = handle_get_total_expense(message, uid, cur)
-            _set_ctx(uid, "GET_TOTAL_EXPENSE")
-
-        elif intent == "TIME_BASED_QUERY":
-            response_text = handle_time_based_query(message, uid, cur)
-            _set_ctx(uid, "TIME_BASED_QUERY")
-
+            reply = handle_get_total_expense(message, user_id, cur)
         elif intent == "CATEGORY_EXPENSE":
-            response_text = handle_category_expense(message, uid, cur)
-            _set_ctx(uid, "CATEGORY_EXPENSE", {"category": extract_category(message)})
-
+            reply = handle_category_expense(message, user_id, cur)
         elif intent == "CHECK_BUDGET":
-            response_text = handle_check_budget(uid, cur)
-            _set_ctx(uid, "CHECK_BUDGET")
-
+            reply = handle_check_budget(user_id, cur)
         elif intent == "SET_BUDGET":
-            response_text = handle_set_budget(message, uid, cur, mysql_conn)
-            _set_ctx(uid, "SET_BUDGET")
-
+            reply = handle_set_budget(message, user_id, cur, mysql_conn)
         elif intent == "SHOW_EXPENSES":
-            response_text = handle_show_expenses(message, uid, cur)
-            _set_ctx(uid, "SHOW_EXPENSES")
-
+            reply = handle_show_expenses(message, user_id, cur)
         elif intent == "SPENDING_ANALYSIS":
-            response_text = handle_spending_analysis(uid, cur)
-            _set_ctx(uid, "SPENDING_ANALYSIS")
-
+            reply = handle_spending_analysis(user_id, cur)
         elif intent == "SAVINGS_INFO":
-            response_text = handle_savings_info(uid, cur)
-            _set_ctx(uid, "SAVINGS_INFO")
-
+            reply = handle_savings_info(user_id, cur)
         elif intent == "SAVINGS_GOAL":
-            response_text = handle_savings_goal(message, uid, cur)
-            _set_ctx(uid, "SAVINGS_GOAL")
-
+            reply = handle_savings_goal(message, user_id, cur)
         elif intent == "COMPARE_EXPENSES":
-            response_text = handle_compare(uid, cur)
-            _set_ctx(uid, "COMPARE_EXPENSES")
-
-        elif intent == "EDIT_EXPENSE":
-            response_text = handle_edit_expense(message, uid, cur, mysql_conn)
-
+            reply = handle_compare(user_id, cur)
         elif intent == "WISHLIST_STATUS":
-            response_text = handle_wishlist_status(uid, cur)
-            _set_ctx(uid, "WISHLIST_STATUS")
-
+            reply = handle_wishlist_status(user_id, cur)
         elif intent == "WISHLIST_TIMELINE":
-            response_text = handle_wishlist_timeline(message, uid, cur)
-            _set_ctx(uid, "WISHLIST_TIMELINE")
-
+            reply = handle_wishlist_timeline(user_id, cur)
         elif intent == "WISHLIST_ITEM_PROGRESS":
-            response_text = handle_wishlist_item_progress(message, uid, cur)
-            _set_ctx(uid, "WISHLIST_ITEM_PROGRESS")
-
+            reply = handle_wishlist_item_progress(message, user_id, cur)
         elif intent == "FINANCIAL_ADVICE":
-            response_text = handle_financial_advice(uid, cur)
-            _set_ctx(uid, "FINANCIAL_ADVICE")
-
+            reply = handle_financial_advice(message, user_id, cur)
         elif intent == "PURCHASE_ADVICE":
-            response_text = handle_purchase_advice(message, uid, cur)
-
+            reply = handle_purchase_advice(message, user_id, cur)
+        elif intent == "TIME_BASED_QUERY":
+            reply = handle_time_based_query(message, user_id, cur)
+        elif intent == "EDIT_EXPENSE":
+            reply = handle_edit_expense(user_id, cur)
         elif intent == "FOLLOW_UP_QUERY":
-            last_intent = ctx.get("last_intent", "")
-            last_data = ctx.get("last_data", {})
-            if "another" in message or (
-                    "add" in message and any(c in message for c in CATEGORY_MAP)):
-                cat_str = last_data.get("category", "") if isinstance(last_data, dict) else ""
-                response_text, ok = handle_add_expense(
-                    message + " " + cat_str, uid, cur, mysql_conn)
-            elif "left now" in message or "budget" in message:
-                response_text = handle_check_budget(uid, cur)
-            elif "only show" in message or any(c in message for c in CATEGORY_MAP):
-                response_text = handle_category_expense(message, uid, cur)
-            elif last_intent in ("CATEGORY_EXPENSE", "SPENDING_ANALYSIS"):
-                response_text = handle_category_expense(message, uid, cur)
-            else:
-                response_text = handle_time_based_query(message, uid, cur)
-
+            reply = handle_follow_up(message, user_id, cur, ctx_data)
         else:
-            response_text = (
-                f"Hey {username}, I didn't quite get that.\n\n"
-                "Here's what I can help with:\n\n"
-                "  'I spent 200 on food'\n"
-                "  'How much did I spend today?'\n"
-                "  'How much this month?'\n"
-                "  'Show category wise spending'\n"
-                "  'Show my transport expenses'\n"
-                "  'Set my budget to 10000'\n"
-                "  'Am I over budget?'\n"
-                "  'How can I save 80000 this month?'\n"
-                "  'How much did I save this month?'\n"
-                "  'Compare this month and last month'\n"
-                "  'Show my wishlist progress'\n"
-                "  'How much have I saved for iPhone?'\n"
-                "  'How much more do I need for laptop?'\n"
-                "  'When can I afford my iPhone?'\n"
-                "  'Can I afford a phone for 15000?'\n"
-                "  'Give me tips to save more'"
+            reply = (
+                "I'm not sure how to help with that. Try asking:\n\n"
+                "  • 'How much did I spend this month?'\n"
+                "  • 'Am I over budget?'\n"
+                "  • 'I spent 500 on food'\n"
+                "  • 'Show my wishlist goals'\n\n"
+                "Or type a keyword like: budget, expense, savings, wishlist, tips"
             )
-
     except Exception as e:
-        print(f"[FinBot ERROR] intent={intent}  err={e}")
-        import traceback; traceback.print_exc()
-        response_text = "Sorry, something went wrong. Please try again."
+        traceback.print_exc()
+        print(f"Chatbot error for user {user_id}: {e}")
+        reply = f"Error: {str(e)}"
 
-    finally:
-        cur.close()
-
-    return jsonify({"success": True, "response": response_text, "intent": intent})
+    cur.close()
+    return jsonify({"success": True, "response": reply})
 
 
-# ---------------- RUN SERVER ----------------
 if __name__ == '__main__':
-    print("Starting Flask server...")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True, port=5000)
