@@ -100,10 +100,10 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
 
   // ---------------- EMPTY STATE ----------------
   Widget _emptyState() {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
+        children: [
           Icon(
             Icons.receipt_long,
             size: 80,

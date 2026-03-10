@@ -228,10 +228,10 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
 
   // ---------------- EMPTY STATE ----------------
   Widget _emptyState() {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
+        children: [
           Icon(
             Icons.people_outline,
             size: 80,

@@ -92,9 +92,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
+        const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text(
               "ADMIN PANEL",
               style: TextStyle(color: Colors.white54, fontSize: 14),
@@ -209,10 +209,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 MaterialPageRoute(builder: (_) => const AdminUsersPage()),
               ).then((_) => fetchAnalytics());
             },
-            child: Padding(
-              padding: const EdgeInsets.all(4),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
               child: Row(
-                children: const [
+                children: [
                   Icon(Icons.people_outline, color: Color(0xFF2FE6D1), size: 28),
                   SizedBox(width: 16),
                   Expanded(
@@ -240,10 +240,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 MaterialPageRoute(builder: (_) => const AdminTransactionsPage()),
               );
             },
-            child: Padding(
-              padding: const EdgeInsets.all(4),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
               child: Row(
-                children: const [
+                children: [
                   Icon(Icons.receipt_long, color: Color(0xFF2FE6D1), size: 28),
                   SizedBox(width: 16),
                   Expanded(

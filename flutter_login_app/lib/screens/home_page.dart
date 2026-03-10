@@ -5,8 +5,9 @@ import 'package:http/http.dart' as http;
 import 'add_expense_page.dart';
 import 'view_expense_page.dart';
 import 'insights_page.dart';
+import 'ai_page.dart';
+import 'wishlist_page.dart';
 import '../services/sms_service.dart';
-
 import '../utils/constants.dart';
 
 class HomePage extends StatefulWidget {
@@ -56,7 +57,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
-          balance = data['balance'].toDouble();
+          balance = (data['balance'] as num).toDouble();
           isLoading = false;
         });
       }
@@ -97,7 +98,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // ---------------- HEADER ----------------
+  // ── HEADER ──────────────────────────────────────────────
   Widget _header() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -125,15 +126,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           width: 44,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.white.withOpacity(0.08),
+            color: Colors.white.withValues(alpha: 0.08),
           ),
           child: const Icon(Icons.notifications_none, color: Colors.white),
-        )
+        ),
       ],
     );
   }
 
-  // ---------------- BALANCE CARD ----------------
+  // ── BALANCE CARD ────────────────────────────────────────
   Widget _balanceCard() {
     return _glassCard(
       child: Column(
@@ -143,9 +144,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               style: TextStyle(color: Colors.white54)),
           const SizedBox(height: 8),
           isLoading
-              ? const CircularProgressIndicator(
-                  color: Color(0xFF2FE6D1),
-                )
+              ? const CircularProgressIndicator(color: Color(0xFF2FE6D1))
               : Text(
                   "₹${balance.toStringAsFixed(2)}",
                   style: const TextStyle(
@@ -163,7 +162,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // ---------------- ACTION BUTTONS ----------------
+  // ── ACTION BUTTONS ──────────────────────────────────────
   Widget _actionButtons() {
     return Row(
       children: [
@@ -177,13 +176,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 );
                 fetchBalance();
               },
-              child: Column(
-                children: const [
+              child: const Column(
+                children: [
                   Icon(Icons.add_circle_outline,
                       color: Color(0xFF2FE6D1), size: 32),
                   SizedBox(height: 8),
-                  Text("Add Expense",
-                      style: TextStyle(color: Colors.white)),
+                  Text("Add Expense", style: TextStyle(color: Colors.white)),
                 ],
               ),
             ),
@@ -200,13 +198,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 );
                 fetchBalance();
               },
-              child: Column(
-                children: const [
-                  Icon(Icons.receipt_long,
-                      color: Color(0xFF2FE6D1), size: 32),
+              child: const Column(
+                children: [
+                  Icon(Icons.receipt_long, color: Color(0xFF2FE6D1), size: 32),
                   SizedBox(height: 8),
-                  Text("View Expenses",
-                      style: TextStyle(color: Colors.white)),
+                  Text("View Expenses", style: TextStyle(color: Colors.white)),
                 ],
               ),
             ),
@@ -216,7 +212,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // ---------------- QUICK INSIGHTS ----------------
+  // ── QUICK INSIGHTS ──────────────────────────────────────
   Widget _quickInsights() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,25 +220,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         const Text(
           "Quick Insights",
           style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w500),
+              color: Colors.white, fontSize: 18, fontWeight: FontWeight.w500),
         ),
         const SizedBox(height: 12),
         Row(
           children: [
+            // Track Spending → goes to Insights/Analytics
             Expanded(
               child: _glassCard(
                 child: InkWell(
                   onTap: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => InsightsPage(userId: widget.userId)),
+                      MaterialPageRoute(
+                          builder: (_) => InsightsPage(userId: widget.userId)),
                     );
                   },
-                  child: Column(
+                  child: const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Icon(Icons.trending_up, color: Colors.green),
                       SizedBox(height: 8),
                       Text("Track Spending",
@@ -256,19 +252,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(width: 12),
+            // Budget Control → goes to AI chatbot
             Expanded(
               child: _glassCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Icon(Icons.wallet, color: Colors.orange),
-                    SizedBox(height: 8),
-                    Text("Budget Control",
-                        style: TextStyle(color: Colors.white54)),
-                    SizedBox(height: 4),
-                    Text("Manage wisely",
-                        style: TextStyle(color: Colors.white, fontSize: 12)),
-                  ],
+                child: InkWell(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => AIPage(userId: widget.userId)),
+                    );
+                  },
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.wallet, color: Colors.orange),
+                      SizedBox(height: 8),
+                      Text("Budget Control",
+                          style: TextStyle(color: Colors.white54)),
+                      SizedBox(height: 4),
+                      Text("Manage wisely",
+                          style: TextStyle(color: Colors.white, fontSize: 12)),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -278,7 +284,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // ---------------- GLASS CARD ----------------
+  // ── GLASS CARD ──────────────────────────────────────────
   Widget _glassCard({required Widget child}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
@@ -287,9 +293,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
+            color: Colors.white.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withOpacity(0.08)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
           ),
           child: child,
         ),
@@ -297,7 +303,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  // ---------------- BOTTOM NAV ----------------
+  // ── BOTTOM NAV ──────────────────────────────────────────
   Widget _bottomNav() {
     return BottomNavigationBar(
       currentIndex: _currentIndex,
@@ -312,9 +318,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             MaterialPageRoute(builder: (_) => const AddExpensePage()),
           ).then((_) => fetchBalance());
         } else if (index == 1) {
-             Navigator.push(
+          Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => InsightsPage(userId: widget.userId)),
+            MaterialPageRoute(
+                builder: (_) => InsightsPage(userId: widget.userId)),
+          );
+        } else if (index == 4) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AIPage(userId: widget.userId)),
+          );
+        } else if (index == 3) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => WishlistPage(userId: widget.userId)),
           );
         } else {
           setState(() => _currentIndex = index);

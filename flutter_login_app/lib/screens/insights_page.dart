@@ -18,7 +18,7 @@ class _InsightsPageState extends State<InsightsPage> {
   final String baseUrl = Constants.baseUrl;
   bool isLoading = true;
   List<dynamic> allExpenses = [];
-  
+
   // Calendar
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
@@ -76,35 +76,36 @@ class _InsightsPageState extends State<InsightsPage> {
         DateTime normalizedDate = DateTime(date.year, date.month, date.day);
 
         // Populate dailySpending globally for markers
-        dailySpending[normalizedDate] = (dailySpending[normalizedDate] ?? 0) + amount;
+        dailySpending[normalizedDate] =
+            (dailySpending[normalizedDate] ?? 0) + amount;
 
         // For Pie Chart & Highest Day -> Only consider THIS MONTH
-        if (date.isAfter(startOfMonth.subtract(const Duration(days: 1))) && 
+        if (date.isAfter(startOfMonth.subtract(const Duration(days: 1))) &&
             date.isBefore(endOfMonth.add(const Duration(days: 1)))) {
-           categorySpending[category] = (categorySpending[category] ?? 0) + amount;
-           
-           if ((dailySpending[normalizedDate] ?? 0) > highestSpendingAmount) {
-             highestSpendingAmount = dailySpending[normalizedDate]!;
-             highestSpendingDay = normalizedDate;
-           }
+          categorySpending[category] =
+              (categorySpending[category] ?? 0) + amount;
+
+          if ((dailySpending[normalizedDate] ?? 0) > highestSpendingAmount) {
+            highestSpendingAmount = dailySpending[normalizedDate]!;
+            highestSpendingDay = normalizedDate;
+          }
         }
       }
     }
-    
+
     if (highestSpendingDay != null) {
       highestSpendingDayStr = DateFormat('MMM d').format(highestSpendingDay!);
     } else {
-        highestSpendingDayStr = "No expenses";
+      highestSpendingDayStr = "No expenses";
     }
   }
 
   void _updateSelectedDayTransactions(DateTime date) {
-    DateTime normalizedSelected = DateTime(date.year, date.month, date.day);
     _selectedDayTransactions = allExpenses.where((item) {
       DateTime itemDate = DateTime.parse(item['date']);
-      return itemDate.year == date.year && 
-             itemDate.month == date.month && 
-             itemDate.day == date.day;
+      return itemDate.year == date.year &&
+          itemDate.month == date.month &&
+          itemDate.day == date.day;
     }).toList();
   }
 
@@ -115,12 +116,14 @@ class _InsightsPageState extends State<InsightsPage> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF050B18),
         elevation: 0,
-        title: const Text("Insights & Analytics", style: TextStyle(color: Colors.white)),
+        title: const Text("Insights & Analytics",
+            style: TextStyle(color: Colors.white)),
         centerTitle: true,
         leading: const BackButton(color: Colors.white),
       ),
-      body: isLoading 
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF2FE6D1)))
+      body: isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF2FE6D1)))
           : RefreshIndicator(
               onRefresh: fetchExpenses,
               child: SingleChildScrollView(
@@ -168,11 +171,14 @@ class _InsightsPageState extends State<InsightsPage> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text("Highest Spending Day", 
+              const Text("Highest Spending Day",
                   style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 4),
               Text("₹${highestSpendingAmount.toStringAsFixed(2)}",
-                  style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold)),
               Text(highestSpendingDayStr,
                   style: const TextStyle(color: Colors.white38, fontSize: 12)),
             ],
@@ -184,7 +190,9 @@ class _InsightsPageState extends State<InsightsPage> {
 
   Widget _buildPieChartSection() {
     if (categorySpending.isEmpty) {
-      return const Center(child: Text("No expense data for this month", style: TextStyle(color: Colors.white38)));
+      return const Center(
+          child: Text("No expense data for this month",
+              style: TextStyle(color: Colors.white38)));
     }
 
     // Prepare sections
@@ -199,23 +207,26 @@ class _InsightsPageState extends State<InsightsPage> {
     ];
 
     categorySpending.forEach((category, amount) {
-      final isLarge = false;
-      final radius = isLarge ? 60.0 : 50.0;
       final color = colors[index % colors.length];
 
       sections.add(PieChartSectionData(
         color: color,
         value: amount,
-        title: '${amount.toStringAsFixed(0)}', // Shorten for view
-        radius: radius,
-        titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+        title: amount.toStringAsFixed(0), // Shorten for view
+        radius: 50.0,
+        titleStyle: const TextStyle(
+            fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
       ));
       index++;
     });
 
     return Column(
       children: [
-        const Text("Spending by Category", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+        const Text("Spending by Category",
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 20),
         SizedBox(
           height: 200,
@@ -238,11 +249,15 @@ class _InsightsPageState extends State<InsightsPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 12, height: 12,
-                  decoration: BoxDecoration(color: colors[i % colors.length], shape: BoxShape.circle),
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                      color: colors[i % colors.length], shape: BoxShape.circle),
                 ),
                 const SizedBox(width: 6),
-                Text(cat, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                Text(cat,
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 12)),
               ],
             );
           }).toList(),
@@ -255,12 +270,16 @@ class _InsightsPageState extends State<InsightsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Daily History", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+        const Text("Daily History",
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w600)),
         const SizedBox(height: 12),
         Container(
           decoration: BoxDecoration(
-             color: Colors.white.withOpacity(0.05),
-             borderRadius: BorderRadius.circular(16),
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(16),
           ),
           child: TableCalendar(
             firstDay: DateTime.utc(2020, 1, 1),
@@ -271,15 +290,15 @@ class _InsightsPageState extends State<InsightsPage> {
             onDaySelected: (selectedDay, focusedDay) {
               setState(() {
                 _selectedDay = selectedDay;
-                _focusedDay = focusedDay; 
+                _focusedDay = focusedDay;
                 _updateSelectedDayTransactions(selectedDay);
               });
             },
             onPageChanged: (focusedDay) {
-                setState(() {
-                    _focusedDay = focusedDay;
-                    processInsights(); 
-                });
+              setState(() {
+                _focusedDay = focusedDay;
+                processInsights();
+              });
             },
             calendarStyle: CalendarStyle(
               defaultTextStyle: const TextStyle(color: Colors.white),
@@ -346,7 +365,9 @@ class _InsightsPageState extends State<InsightsPage> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: isIncome ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                  color: isIncome
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.red.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -360,10 +381,12 @@ class _InsightsPageState extends State<InsightsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item['category'], 
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    Text(item['time'], 
-                        style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    Text(item['category'],
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    Text(item['time'],
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12)),
                   ],
                 ),
               ),

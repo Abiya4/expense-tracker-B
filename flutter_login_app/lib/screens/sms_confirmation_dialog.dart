@@ -139,7 +139,7 @@ class _SMSConfirmationDialogState extends State<SMSConfirmationDialog> {
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               decoration: const InputDecoration(labelText: 'Category'),
-              value: _selectedCategory,
+              initialValue: _selectedCategory,
               items: (widget.type == 'income' ? _incomeCategories : _expenseCategories)
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
