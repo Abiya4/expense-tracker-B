@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'add_expense_page.dart';
@@ -26,18 +27,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool isLoading = true;
   final String baseUrl = Constants.baseUrl;
   late SmsService _smsService;
+  late StreamSubscription _smsSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     fetchBalance();
-    _smsService = SmsService(context, widget.userId, onRefresh: fetchBalance);
+    _smsService = SmsService(context, widget.userId);
     _smsService.initListener();
+    _smsSubscription = SmsService.onSmsEvent.listen((_) {
+      if (mounted) fetchBalance();
+    });
   }
 
   @override
   void dispose() {
+    _smsSubscription.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -121,15 +127,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           ],
         ),
-        Container(
-          height: 44,
-          width: 44,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white.withValues(alpha: 0.08),
-          ),
-          child: const Icon(Icons.notifications_none, color: Colors.white),
-        ),
+        const SizedBox(height: 44), // To keep symmetrical spacing if needed, or simply empty.
       ],
     );
   }
@@ -181,7 +179,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   Icon(Icons.add_circle_outline,
                       color: Color(0xFF2FE6D1), size: 32),
                   SizedBox(height: 8),
-                  Text("Add Expense", style: TextStyle(color: Colors.white)),
+                  Text("Add Transaction", style: TextStyle(color: Colors.white)),
                 ],
               ),
             ),
@@ -202,7 +200,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 children: [
                   Icon(Icons.receipt_long, color: Color(0xFF2FE6D1), size: 32),
                   SizedBox(height: 8),
-                  Text("View Expenses", style: TextStyle(color: Colors.white)),
+                  Text("View Transactions", style: TextStyle(color: Colors.white)),
                 ],
               ),
             ),

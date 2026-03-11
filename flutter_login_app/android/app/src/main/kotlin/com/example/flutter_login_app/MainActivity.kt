@@ -8,9 +8,16 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 
 class MainActivity: FlutterActivity() {
     private val METHOD_CHANNEL = "com.example.flutter_login_app/sms_methods"
+    private val EVENT_CHANNEL = "com.example.flutter_login_app/sms_events"
+    private var eventSink: EventChannel.EventSink? = null
+    private var smsBroadcastReceiver: BroadcastReceiver? = null
 
     companion object {
         private var instance: MainActivity? = null
@@ -60,6 +67,46 @@ class MainActivity: FlutterActivity() {
             } else {
                 result.notImplemented()
             }
+        }
+
+        // Event Channel for Real-time SMS Updates
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    eventSink = events
+                    registerSmsReceiver()
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    eventSink = null
+                    unregisterSmsReceiver()
+                }
+            }
+        )
+    }
+
+    private fun registerSmsReceiver() {
+        if (smsBroadcastReceiver == null) {
+            smsBroadcastReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == "com.example.flutter_login_app.NEW_SMS_SAVED") {
+                        eventSink?.success("new_sms_pending")
+                    }
+                }
+            }
+            val filter = IntentFilter("com.example.flutter_login_app.NEW_SMS_SAVED")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(smsBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(smsBroadcastReceiver, filter)
+            }
+        }
+    }
+
+    private fun unregisterSmsReceiver() {
+        if (smsBroadcastReceiver != null) {
+            unregisterReceiver(smsBroadcastReceiver)
+            smsBroadcastReceiver = null
         }
     }
 }

@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../utils/constants.dart';
 
 class AdminTransactionsPage extends StatefulWidget {
   const AdminTransactionsPage({super.key});
@@ -11,8 +12,10 @@ class AdminTransactionsPage extends StatefulWidget {
 }
 
 class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
-  final String baseUrl = "http://10.0.5.13:5000";
+  final String baseUrl = Constants.baseUrl;
+  final TextEditingController searchController = TextEditingController();
   List<dynamic> transactions = [];
+  List<dynamic> filteredTransactions = [];
   bool isLoading = true;
 
   @override
@@ -28,6 +31,7 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
       if (response.statusCode == 200) {
         setState(() {
           transactions = jsonDecode(response.body);
+          filteredTransactions = transactions;
           isLoading = false;
         });
       }
@@ -36,6 +40,21 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Failed to load transactions")),
       );
+    }
+  }
+
+  void filterTransactions(String query) {
+    if (query.isEmpty) {
+      setState(() {
+        filteredTransactions = transactions;
+      });
+    } else {
+      setState(() {
+        filteredTransactions = transactions.where((t) {
+          final username = t['username'].toString().toLowerCase();
+          return username.contains(query.toLowerCase());
+        }).toList();
+      });
     }
   }
 
@@ -48,6 +67,8 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
           children: [
             _header(),
             const SizedBox(height: 20),
+            _searchBar(),
+            const SizedBox(height: 20),
             Expanded(
               child: isLoading
                   ? const Center(
@@ -55,15 +76,15 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
                         color: Color(0xFF2FE6D1),
                       ),
                     )
-                  : transactions.isEmpty
+                  : filteredTransactions.isEmpty
                       ? _emptyState()
                       : RefreshIndicator(
                           onRefresh: fetchTransactions,
                           child: ListView.builder(
                             padding: const EdgeInsets.symmetric(horizontal: 20),
-                            itemCount: transactions.length,
+                            itemCount: filteredTransactions.length,
                             itemBuilder: (context, index) {
-                              final transaction = transactions[index];
+                              final transaction = filteredTransactions[index];
                               return _transactionCard(transaction);
                             },
                           ),
@@ -94,6 +115,47 @@ class _AdminTransactionsPageState extends State<AdminTransactionsPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ---------------- SEARCH BAR ----------------
+  Widget _searchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: TextField(
+              controller: searchController,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: "Search by username...",
+                hintStyle: const TextStyle(color: Colors.white54),
+                border: InputBorder.none,
+                icon: const Icon(Icons.search, color: Color(0xFF2FE6D1)),
+                suffixIcon: searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.white54),
+                        onPressed: () {
+                          searchController.clear();
+                          filterTransactions("");
+                        },
+                      )
+                    : null,
+              ),
+              onChanged: filterTransactions,
+            ),
+          ),
+        ),
       ),
     );
   }

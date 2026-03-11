@@ -293,6 +293,27 @@ class _InsightsPageState extends State<InsightsPage> {
                 _focusedDay = focusedDay;
                 _updateSelectedDayTransactions(selectedDay);
               });
+
+              DateTime normalized = DateTime(selectedDay.year, selectedDay.month, selectedDay.day);
+              if (!dailySpending.containsKey(normalized)) {
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF161D32),
+                    title: const Text("No Transactions", style: TextStyle(color: Colors.white)),
+                    content: Text(
+                      "There are no transactions recorded on ${DateFormat('MMM d, yyyy').format(selectedDay)}.",
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text("OK", style: TextStyle(color: Color(0xFF2FE6D1))),
+                      ),
+                    ],
+                  ),
+                );
+              }
             },
             onPageChanged: (focusedDay) {
               setState(() {

@@ -251,6 +251,29 @@ class _AddExpensePageState extends State<AddExpensePage> {
       return;
     }
 
+    double amountToAdd = double.tryParse(amountController.text) ?? 0;
+
+    if (selectedType == "expense") {
+      try {
+        final balResponse = await http.get(Uri.parse("$baseUrl/balance"));
+        if (balResponse.statusCode == 200) {
+          final data = jsonDecode(balResponse.body);
+          double currentBalance = (data['balance'] as num).toDouble();
+          if (currentBalance - amountToAdd < 0) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Insufficient balance! Expense ignored."),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        print("Failed to fetch balance: $e");
+      }
+    }
+
     final response = await http.post(
       Uri.parse("$baseUrl/expenses"),
       headers: {"Content-Type": "application/json"},

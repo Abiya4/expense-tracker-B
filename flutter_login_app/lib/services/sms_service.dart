@@ -2,18 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import '../utils/constants.dart';
 
 class SmsService {
   static const MethodChannel _methodChannel =
       MethodChannel('com.example.flutter_login_app/sms_methods');
+  static const EventChannel _eventChannel =
+      EventChannel('com.example.flutter_login_app/sms_events');
+
+  static final StreamController<void> _refreshStreamController = StreamController<void>.broadcast();
+  static Stream<void> get onSmsEvent => _refreshStreamController.stream;
+  static bool _isListening = false;
 
   final BuildContext context;
   final int userId;
-  final VoidCallback? onRefresh;
 
-  SmsService(this.context, this.userId, {this.onRefresh});
+  SmsService(this.context, this.userId);
 
   void initListener() async {
     // Request permissions
@@ -29,15 +35,29 @@ class SmsService {
       }
     }
 
-    // 1 & 1.5. Sync offline SMS (pending & categorized)
-    syncOfflineSms();
+    if (_isListening) return;
+    _isListening = true;
 
-    print("SMS Listener Initialized (On Resume/Start Only)");
+    // 1 & 1.5. Sync offline SMS (pending & categorized)
+    await syncOfflineSms();
+
+    // Listen to real-time events from Native Android
+    _eventChannel.receiveBroadcastStream().listen((event) async {
+      if (event == "new_sms_pending") {
+        print("Real-time SMS event received: $event");
+        await syncOfflineSms();
+      }
+    }, onError: (error) {
+      print("EventChannel Error: $error");
+    });
+
+    print("SMS Listener Initialized (And Listening to EventChannel)");
   }
 
   Future<void> syncOfflineSms() async {
     await _syncPendingSms();
     await _syncCategorizedSms();
+    _refreshStreamController.add(null);
   }
 
   Future<void> _syncPendingSms() async {
@@ -67,7 +87,6 @@ class SmsService {
       // Clear pending list after successfully parsing & transmitting
       if (smsList.isNotEmpty) {
         await _methodChannel.invokeMethod('clearPendingSms');
-        if (onRefresh != null) onRefresh!();
       }
     } catch (e) {
       print("Error syncing pending SMS: $e");
@@ -113,7 +132,6 @@ class SmsService {
       // CRITICAL: We MUST clear the categorized list after pushing them to backend
       if (smsList.isNotEmpty) {
         await _methodChannel.invokeMethod('clearCategorizedSms');
-        if (onRefresh != null) onRefresh!();
       }
     } catch (e) {
       print("Error syncing categorized SMS: $e");

@@ -38,6 +38,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 // Dismiss notification
                 notificationManager.cancel(notificationId)
                 Toast.makeText(context, "Expense ignored", Toast.LENGTH_SHORT).show()
+                sendUpdateBroadcast(context)
             }
             ACTION_CATEGORY_RECENT -> {
                 val category = intent.getStringExtra(EXTRA_RECENT_CATEGORY) ?: "Uncategorized"
@@ -49,6 +50,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 
                 notificationManager.cancel(notificationId)
                 Toast.makeText(context, "Saved as $category", Toast.LENGTH_SHORT).show()
+                sendUpdateBroadcast(context)
             }
             ACTION_CATEGORY_SUBMIT -> {
                 val remoteInput = RemoteInput.getResultsFromIntent(intent)
@@ -60,13 +62,19 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         saveCategorizedSms(context, sender, body, timestamp, category)
                         // 2. Remove from pending list
                         removeSmsFromPending(context, timestamp)
-                        
                         notificationManager.cancel(notificationId)
                         Toast.makeText(context, "Saved as $category", Toast.LENGTH_SHORT).show()
+                        sendUpdateBroadcast(context)
                     }
                 }
             }
         }
+    }
+
+    private fun sendUpdateBroadcast(context: Context) {
+        val updateIntent = Intent("com.example.flutter_login_app.NEW_SMS_SAVED")
+        updateIntent.setPackage(context.packageName)
+        context.sendBroadcast(updateIntent)
     }
 
     private fun removeSmsFromPending(context: Context, timestamp: Long) {

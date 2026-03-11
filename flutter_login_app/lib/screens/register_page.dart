@@ -21,13 +21,36 @@ class _RegisterPageState extends State<RegisterPage> {
   final TextEditingController passwordController = TextEditingController();
 
   Future<void> registerUser() async {
+    final name = usernameController.text.trim();
+    final phone = phoneController.text.trim();
+
+    if (name.isEmpty || !RegExp(r'^[a-zA-Z\s]+$').hasMatch(name)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Name must contain only letters and spaces."),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (phone.isEmpty || !RegExp(r'^\d{10}$').hasMatch(phone)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Phone number must be exactly 10 digits."),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     try {
       final response = await http.post(
         Uri.parse("${Constants.baseUrl}/signup"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "username": usernameController.text.trim(),
-          "phone": phoneController.text.trim(),
+          "username": name,
+          "phone": phone,
           "password": passwordController.text.trim(),
           "balance": double.tryParse(balanceController.text) ?? 0,
         }),

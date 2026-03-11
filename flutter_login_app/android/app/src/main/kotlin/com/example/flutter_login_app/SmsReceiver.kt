@@ -34,8 +34,13 @@ class SmsReceiver : BroadcastReceiver() {
                     // 1. Save to SharedPreferences for persistence
                     saveSmsLocally(context, sender, body, timestamp)
 
-                    // 2. Show Notification
+                    // 2. Show Notification (User EXPLICITLY requested this to stay)
                     showNotification(context, sender, body, timestamp)
+
+                    // 3. Broadcast to MainActivity (for EventChannel)
+                    val updateIntent = Intent("com.example.flutter_login_app.NEW_SMS_SAVED")
+                    updateIntent.setPackage(context.packageName)
+                    context.sendBroadcast(updateIntent)
                 }
             }
         }

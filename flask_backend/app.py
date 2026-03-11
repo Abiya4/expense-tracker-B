@@ -10,27 +10,58 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# ---------------- DATABASE CONNECTION ----------------
-mysql_conn = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="u2303044",
-    database="mini_project_db"
-)
+# ---------------- DATABASE CONNECTION POOL ----------------
+dbconfig = {
+    "host": "localhost",
+    "user": "root",
+    "password": "Abiya@2005!",
+    "database": "mini_project_db"
+}
 
-# ---------------- RECONNECT HELPER ----------------
+from mysql.connector import pooling
+try:
+    connection_pool = pooling.MySQLConnectionPool(
+        pool_name="mypool",
+        pool_size=10,
+        pool_reset_session=True,
+        **dbconfig
+    )
+except Exception as err:
+    print("Error creating connection pool:", err)
+
+# Thread-local storage for connection
+import threading
+local_data = threading.local()
+
+def get_db_connection():
+    if not hasattr(local_data, "conn") or not local_data.conn.is_connected():
+        local_data.conn = connection_pool.get_connection()
+    return local_data.conn
+
+class ProxyConnection:
+    def commit(self):
+        if hasattr(local_data, "conn") and local_data.conn.is_connected():
+            local_data.conn.commit()
+    def rollback(self):
+        if hasattr(local_data, "conn") and local_data.conn.is_connected():
+            local_data.conn.rollback()
+
+mysql_conn = ProxyConnection()
+
 def get_cursor(dictionary=False):
-    global mysql_conn
+    conn = get_db_connection()
     try:
-        mysql_conn.ping(reconnect=True, attempts=3, delay=2)
+        conn.ping(reconnect=True, attempts=3, delay=1)
     except Exception:
-        mysql_conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="u2303044",
-            database="mini_project_db"
-        )
-    return mysql_conn.cursor(buffered=True, dictionary=dictionary)
+        local_data.conn = connection_pool.get_connection()
+        conn = local_data.conn
+    return conn.cursor(buffered=True, dictionary=dictionary)
+
+@app.teardown_appcontext
+def close_connection(exception):
+    if hasattr(local_data, "conn") and local_data.conn.is_connected():
+        local_data.conn.close()
+        del local_data.conn
 
 # ---------------- MIGRATION ----------------
 def run_migrations():
@@ -235,6 +266,34 @@ def add_expense():
     final_date = date_val if date_val else now.date()
     final_time = time_val if time_val else now.time()
     cur = get_cursor()
+    
+    # SMS Deduplication Logic
+    if entry_method == 'sms' and status == 'confirmed':
+        # Check if we already have this exact SMS
+        cur.execute(
+            "SELECT id, status FROM expenses WHERE user_id=%s AND amount=%s AND date=%s AND type=%s AND entry_method='sms'",
+            (logged_in_user["id"], amount, final_date, t_type)
+        )
+        existing = cur.fetchone()
+        
+        if existing:
+            existing_id, existing_status = existing[0], existing[1]
+            if existing_status == 'confirmed':
+                print(f"Skipping duplicate confirmed SMS expense: {amount} on {final_date}")
+                cur.close()
+                return jsonify({"success": True, "message": "Already confirmed"}), 200
+            elif existing_status == 'pending':
+                print(f"Updating pending SMS expense to confirmed: {amount} on {final_date}")
+                cur.execute(
+                    "UPDATE expenses SET status='confirmed', category=%s, time=%s, type=%s WHERE id=%s",
+                    (category, final_time, t_type, existing_id)
+                )
+                adj = amount if t_type == 'income' else -amount
+                cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (adj, logged_in_user["id"]))
+                mysql_conn.commit()
+                cur.close()
+                return jsonify({"success": True}), 200
+
     cur.execute(
         "INSERT INTO expenses(amount, date, time, category, user_id, type, status, entry_method) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
         (amount, final_date, final_time, category, logged_in_user["id"], t_type, status, entry_method)
@@ -264,11 +323,12 @@ def sync_pending_expenses():
             category = item.get('category', 'Uncategorized')
             t_type   = item.get('type', 'expense')
             cur.execute("""
-                SELECT id FROM expenses
-                WHERE user_id=%s AND amount=%s AND date=%s AND type=%s AND status='pending'
+                SELECT id, status FROM expenses
+                WHERE user_id=%s AND amount=%s AND date=%s AND type=%s AND entry_method='sms'
             """, (logged_in_user["id"], amount, date_str, t_type))
-            if cur.fetchone():
-                print(f"Skipping duplicate pending expense: {amount} on {date_str}")
+            existing = cur.fetchone()
+            if existing:
+                print(f"Skipping duplicate SMS expense sync (status: {existing[1]}): {amount} on {date_str}")
                 continue
             cur.execute(
                 "INSERT INTO expenses(amount, date, time, category, user_id, type, status, entry_method) VALUES (%s, %s, %s, %s, %s, %s, 'pending', 'sms')",
@@ -315,6 +375,49 @@ def confirm_sms_expense():
     cur.close()
     return jsonify({"success": True})
 
+@app.route('/expenses/<int:expense_id>', methods=['PUT'])
+def update_expense(expense_id):
+    if logged_in_user["role"] != 'user':
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+        
+    data = request.json
+    amount = data.get('amount')
+    category = data.get('category')
+    t_type = data.get('type')
+    status = data.get('status', 'confirmed')  # default to confirmed
+    
+    cur = get_cursor()
+    cur.execute(
+        "SELECT amount, type, status FROM expenses WHERE id=%s AND user_id=%s",
+        (expense_id, logged_in_user["id"])
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        return jsonify({"success": False, "message": "Expense not found"}), 404
+        
+    old_amount, old_type, old_status = float(row[0]), row[1], row[2]
+    
+    # Adjust balance
+    # Reverse old if it was confirmed
+    if old_status == 'confirmed':
+        reversal = -old_amount if old_type == 'income' else old_amount
+        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (reversal, logged_in_user["id"]))
+        
+    # Apply new if it is being confirmed
+    if status == 'confirmed':
+        adj = amount if t_type == 'income' else -amount
+        cur.execute("UPDATE users SET balance = balance + %s WHERE id=%s", (adj, logged_in_user["id"]))
+        
+    # Update the row
+    cur.execute(
+        "UPDATE expenses SET amount=%s, category=%s, type=%s, status=%s WHERE id=%s AND user_id=%s",
+        (amount, category, t_type, status, expense_id, logged_in_user["id"])
+    )
+    mysql_conn.commit()
+    cur.close()
+    return jsonify({"success": True})
+
 @app.route('/expenses/<int:expense_id>', methods=['DELETE'])
 def delete_expense(expense_id):
     if logged_in_user["role"] != 'user':
@@ -347,17 +450,29 @@ def admin_users():
     q   = request.args.get('q', '').strip()
     cur = get_cursor()
     if q:
-        cur.execute(
-            "SELECT id, username, phone, balance, is_active FROM users WHERE role='user' AND (username LIKE %s OR phone LIKE %s)",
-            (f"%{q}%", f"%{q}%")
-        )
+        cur.execute("""
+            SELECT id, username, phone, balance, is_active,
+                   (SELECT category FROM expenses 
+                    WHERE user_id = users.id AND type='expense' AND status='confirmed'
+                    GROUP BY category ORDER BY SUM(amount) DESC LIMIT 1) as top_category
+            FROM users 
+            WHERE role='user' AND (username LIKE %s OR phone LIKE %s)
+        """, (f"%{q}%", f"%{q}%"))
     else:
-        cur.execute("SELECT id, username, phone, balance, is_active FROM users WHERE role='user'")
+        cur.execute("""
+            SELECT id, username, phone, balance, is_active,
+                   (SELECT category FROM expenses 
+                    WHERE user_id = users.id AND type='expense' AND status='confirmed'
+                    GROUP BY category ORDER BY SUM(amount) DESC LIMIT 1) as top_category
+            FROM users 
+            WHERE role='user'
+        """)
     rows = cur.fetchall()
     cur.close()
     return jsonify([{
         "id": r[0], "username": r[1], "phone": r[2],
-        "balance": float(r[3]), "active": bool(r[4])
+        "balance": float(r[3]), "active": bool(r[4]),
+        "top_category": r[5] if len(r) > 5 and r[5] else 'No expenses'
     } for r in rows])
 
 @app.route('/admin/users/<int:user_id>', methods=['DELETE'])
@@ -2365,4 +2480,4 @@ def chatbot():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host='0.0.0.0', debug=True, port=5000)

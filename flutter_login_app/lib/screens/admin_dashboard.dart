@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../utils/constants.dart';
 
 import 'admin_users_page.dart';
 import 'admin_transactions_page.dart';
@@ -15,7 +16,7 @@ class AdminDashboard extends StatefulWidget {
 }
 
 class _AdminDashboardState extends State<AdminDashboard> {
-  final String baseUrl = "http://10.0.5.13:5000";
+  final String baseUrl = Constants.baseUrl;
   
   int totalUsers = 0;
   double totalExpenses = 0.0;

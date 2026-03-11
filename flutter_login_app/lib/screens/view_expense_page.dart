@@ -1,9 +1,12 @@
 import 'dart:ui';
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../utils/constants.dart';
+import '../services/sms_service.dart';
+import '../services/sms_service.dart';
 
 class ViewExpensesPage extends StatefulWidget {
   const ViewExpensesPage({super.key});
@@ -17,16 +20,25 @@ class _ViewExpensesPageState extends State<ViewExpensesPage> with WidgetsBinding
   List<dynamic> confirmedTransactions = [];
   bool isLoading = true;
   final String baseUrl = Constants.baseUrl;
+  late SmsService _smsService;
+  late StreamSubscription _smsSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     fetchTransactions();
+    // Also initialize SMS service here to listen to real-time events and refresh this specific page
+    _smsService = SmsService(context, 1); 
+    _smsService.initListener();
+    _smsSubscription = SmsService.onSmsEvent.listen((_) {
+      if (mounted) fetchTransactions();
+    });
   }
 
   @override
   void dispose() {
+    _smsSubscription.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

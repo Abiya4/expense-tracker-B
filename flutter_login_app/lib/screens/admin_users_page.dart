@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../utils/constants.dart';
 
 class AdminUsersPage extends StatefulWidget {
   const AdminUsersPage({super.key});
@@ -11,7 +12,7 @@ class AdminUsersPage extends StatefulWidget {
 }
 
 class _AdminUsersPageState extends State<AdminUsersPage> {
-  final String baseUrl = "http://10.0.5.13:5000";
+  final String baseUrl = Constants.baseUrl;
   final TextEditingController searchController = TextEditingController();
   List<dynamic> users = [];
   List<dynamic> filteredUsers = [];
@@ -115,6 +116,55 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
           ),
         ],
       ),
+    );
+  }
+
+  void showUserDetails(Map<String, dynamic> user) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF0B1E2D),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Text(
+          user['username'],
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _detailRow(Icons.phone, "Phone", user['phone']),
+            const SizedBox(height: 12),
+            _detailRow(Icons.account_balance_wallet, "Balance", "₹${user['balance'].toStringAsFixed(2)}"),
+            const SizedBox(height: 12),
+            _detailRow(Icons.star, "Top Category", user['top_category'] ?? "No expenses"),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Color(0xFF2FE6D1))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _detailRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.white54, size: 20),
+        const SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            Text(value, style: const TextStyle(color: Colors.white, fontSize: 16)),
+          ],
+        ),
+      ],
     );
   }
 
@@ -256,9 +306,12 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      child: ClipRRect(
+      child: InkWell(
+        onTap: () => showUserDetails(user),
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             padding: const EdgeInsets.all(16),
@@ -383,6 +436,7 @@ class _AdminUsersPageState extends State<AdminUsersPage> {
             ),
           ),
         ),
+      ),
       ),
     );
   }
