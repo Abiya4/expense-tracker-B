@@ -29,6 +29,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final String baseUrl = Constants.baseUrl;
   late SmsService _smsService;
   late StreamSubscription _smsSubscription;
+  String budgetInsightText = "Manage wisely";
+  String savingsInsightText = "";
 
   @override
   void initState() {
@@ -70,12 +72,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         
         // Check budget every time the balance updates (e.g. on return or SMS)
         await _checkAndShowBudgetAlert();
+        await fetchInsights();
       }
     } catch (e) {
       setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Failed to load balance")),
       );
+    }
+  }
+
+  Future<void> fetchInsights() async {
+    try {
+      final res = await http.get(Uri.parse("$baseUrl/budget/home_insights/${widget.userId}"));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        setState(() {
+          if (data['has_budget'] == true) {
+            budgetInsightText = "₹${data['budget_left']} left for ${data['days_left']} days, limit to ₹${data['daily_limit']}/day";
+          } else {
+            budgetInsightText = "Set a budget to manage wisely";
+          }
+          savingsInsightText = "Savings: ${data['savings_rate']}% | MoM: ${data['suggestion']}";
+        });
+      }
+    } catch (e) {
+      debugPrint("Insights fetch error: $e");
     }
   }
 
@@ -287,16 +309,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           builder: (_) => AIPage(userId: widget.userId)),
                     );
                   },
-                  child: const Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.wallet, color: Colors.orange),
-                      SizedBox(height: 8),
-                      Text("Budget Control",
+                      const Icon(Icons.wallet, color: Colors.orange),
+                      const SizedBox(height: 8),
+                      const Text("Budget Control",
                           style: TextStyle(color: Colors.white54)),
-                      SizedBox(height: 4),
-                      Text("Manage wisely",
-                          style: TextStyle(color: Colors.white, fontSize: 12)),
+                      const SizedBox(height: 4),
+                      Text(budgetInsightText,
+                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                      if (savingsInsightText.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(savingsInsightText,
+                              style: const TextStyle(color: Colors.white70, fontSize: 10)),
+                        ),
                     ],
                   ),
                 ),

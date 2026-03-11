@@ -14,7 +14,7 @@ CORS(app)
 dbconfig = {
     "host": "localhost",
     "user": "root",
-    "password": "heeseung",
+    "password": "u2303044",
     "database": "mini_project_db"
 }
 
@@ -918,6 +918,82 @@ def smart_insights():
     cur.close()
     return jsonify({"success": True, "insights": insights[:3]})
 
+# ================= HOME INSIGHTS =================
+
+@app.route('/budget/home_insights/<int:user_id>', methods=['GET'])
+def home_insights(user_id):
+    cur = get_cursor(dictionary=True)
+    from calendar import monthrange
+    today = datetime.today()
+    days_in_month = monthrange(today.year, today.month)[1]
+    days_left = days_in_month - today.day
+
+    # Get budget limit
+    cur.execute("""
+        SELECT monthly_limit FROM budgets
+        WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
+    """, (user_id,))
+    budget_row = cur.fetchone()
+    monthly_limit = float(budget_row['monthly_limit']) if budget_row else 0.0
+
+    # Get current month spent
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
+        AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
+    """, (user_id,))
+    month_spent = float(cur.fetchone()['spent'])
+
+    # Get current month income
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS income FROM expenses
+        WHERE user_id=%s AND type='income' AND status='confirmed'
+        AND MONTH(date)=MONTH(CURDATE()) AND YEAR(date)=YEAR(CURDATE())
+    """, (user_id,))
+    month_income = float(cur.fetchone()['income'])
+
+    # Get last month spent
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS prev FROM expenses
+        WHERE user_id=%s AND type='expense' AND status='confirmed'
+        AND MONTH(date)=MONTH(CURDATE()-INTERVAL 1 MONTH)
+        AND YEAR(date)=YEAR(CURDATE()-INTERVAL 1 MONTH)
+    """, (user_id,))
+    prev_spent = float(cur.fetchone()['prev'])
+
+    cur.close()
+
+    # Calculate fields
+    budget_left = max(0.0, monthly_limit - month_spent)
+    daily_limit = budget_left / max(days_left, 1) if monthly_limit > 0 else 0.0
+    
+    savings_rate = 0.0
+    if month_income > 0:
+        savings_rate = max(0.0, ((month_income - month_spent) / month_income) * 100)
+
+    # MoM suggestion
+    suggestion = "Set a budget"
+    if prev_spent > 0:
+        diff_pct = ((month_spent - prev_spent) / prev_spent) * 100
+        if diff_pct > 10:
+            suggestion = "Cut needed"
+        elif diff_pct < -10:
+            suggestion = "Great saving"
+        else:
+            suggestion = "On track"
+    elif monthly_limit > 0:
+        suggestion = "On track"
+
+    return jsonify({
+        "success": True,
+        "budget_left": round(budget_left, 2),
+        "days_left": days_left,
+        "daily_limit": round(daily_limit, 2),
+        "savings_rate": round(savings_rate, 1),
+        "suggestion": suggestion,
+        "has_budget": monthly_limit > 0
+    })
+
 # ============================================================
 # RULE-BASED AI FINANCE CHATBOT
 # ============================================================
@@ -935,11 +1011,10 @@ def _set_ctx(uid, intent, data=None):
     _conversation_ctx[uid] = {"last_intent": intent, "last_data": data or {}}
 
 
-# ── KEYWORD → SUGGESTION MENUS ─────────────────────────────
 KEYWORD_MENUS = {
     "budget": {
         "label": "budget",
-        "prompt": "Here are some things I can help with for 💰 Budget:",
+        "prompt": "Here are some things I can help with for Budget:",
         "suggestions": [
             "How much of my budget have I used this month?",
             "Am I over budget?",
@@ -950,7 +1025,7 @@ KEYWORD_MENUS = {
     },
     "food": {
         "label": "Food",
-        "prompt": "Here are some Food 🍔 expense queries:",
+        "prompt": "Here are some Food expense queries:",
         "suggestions": [
             "How much did I spend on food this month?",
             "Show my food expenses this month",
@@ -960,7 +1035,7 @@ KEYWORD_MENUS = {
     },
     "transport": {
         "label": "Transport",
-        "prompt": "Here are some Transport 🚗 expense queries:",
+        "prompt": "Here are some Transport expense queries:",
         "suggestions": [
             "How much did I spend on transport this month?",
             "Show my transport expenses this month",
@@ -969,7 +1044,7 @@ KEYWORD_MENUS = {
     },
     "shopping": {
         "label": "Shopping",
-        "prompt": "Here are some Shopping 🛍 expense queries:",
+        "prompt": "Here are some Shopping expense queries:",
         "suggestions": [
             "How much did I spend on shopping this month?",
             "Show my shopping expenses this month",
@@ -978,7 +1053,7 @@ KEYWORD_MENUS = {
     },
     "entertainment": {
         "label": "Entertainment",
-        "prompt": "Here are some Entertainment 🎬 expense queries:",
+        "prompt": "Here are some Entertainment expense queries:",
         "suggestions": [
             "How much did I spend on entertainment this month?",
             "Show my entertainment expenses this month",
@@ -987,7 +1062,7 @@ KEYWORD_MENUS = {
     },
     "health": {
         "label": "Health",
-        "prompt": "Here are some Health 🏥 expense queries:",
+        "prompt": "Here are some Health expense queries:",
         "suggestions": [
             "How much did I spend on health this month?",
             "Show my health expenses this month",
@@ -996,7 +1071,7 @@ KEYWORD_MENUS = {
     },
     "bills": {
         "label": "Bills",
-        "prompt": "Here are some Bills 📄 expense queries:",
+        "prompt": "Here are some Bills expense queries:",
         "suggestions": [
             "How much did I spend on bills this month?",
             "Show my bills this month",
@@ -1005,7 +1080,7 @@ KEYWORD_MENUS = {
     },
     "wishlist": {
         "label": "wishlist / goals",
-        "prompt": "Here are some Wishlist 🎯 queries:",
+        "prompt": "Here are some Wishlist queries:",
         "suggestions": [
             "Show all my wishlist goals",
             "How much have I saved for iPhone?",
@@ -1016,7 +1091,7 @@ KEYWORD_MENUS = {
     },
     "goal": {
         "label": "wishlist / goals",
-        "prompt": "Here are some Goal 🎯 queries:",
+        "prompt": "Here are some Goal queries:",
         "suggestions": [
             "Show all my wishlist goals",
             "When can I reach my goals?",
@@ -1026,7 +1101,7 @@ KEYWORD_MENUS = {
     },
     "expense": {
         "label": "expenses",
-        "prompt": "Here are some Expense 📊 queries:",
+        "prompt": "Here are some Expense queries:",
         "suggestions": [
             "How much did I spend this month?",
             "Show category wise spending breakdown",
@@ -1037,7 +1112,7 @@ KEYWORD_MENUS = {
     },
     "spending": {
         "label": "spending",
-        "prompt": "Here are some Spending 📊 queries:",
+        "prompt": "Here are some Spending queries:",
         "suggestions": [
             "How much did I spend this month?",
             "Where am I spending the most?",
@@ -1048,7 +1123,7 @@ KEYWORD_MENUS = {
     },
     "save": {
         "label": "savings",
-        "prompt": "Here are some Savings 💎 queries:",
+        "prompt": "Here are some Savings queries:",
         "suggestions": [
             "How much have I saved this month?",
             "What is my savings rate?",
@@ -1059,7 +1134,7 @@ KEYWORD_MENUS = {
     },
     "saving": {
         "label": "savings",
-        "prompt": "Here are some Savings 💎 queries:",
+        "prompt": "Here are some Savings queries:",
         "suggestions": [
             "How much have I saved this month?",
             "What is my savings rate?",
@@ -1069,7 +1144,7 @@ KEYWORD_MENUS = {
     },
     "savings": {
         "label": "savings",
-        "prompt": "Here are some Savings 💎 queries:",
+        "prompt": "Here are some Savings queries:",
         "suggestions": [
             "How much have I saved this month?",
             "What is my savings rate?",
@@ -1079,7 +1154,7 @@ KEYWORD_MENUS = {
     },
     "income": {
         "label": "income",
-        "prompt": "Here are some Income 💵 queries:",
+        "prompt": "Here are some Income queries:",
         "suggestions": [
             "What is my total income this month?",
             "How much did I earn this month?",
@@ -1089,7 +1164,7 @@ KEYWORD_MENUS = {
     },
     "salary": {
         "label": "income / salary",
-        "prompt": "Here are some Salary 💵 queries:",
+        "prompt": "Here are some Salary queries:",
         "suggestions": [
             "What is my total income this month?",
             "How much did I earn this month?",
@@ -1099,28 +1174,26 @@ KEYWORD_MENUS = {
     },
     "tips": {
         "label": "financial tips",
-        "prompt": "Here are some Financial Tips 📚 I can give you:",
+        "prompt": "Here are some Financial Tips I can give you:",
         "suggestions": [
             "Give me financial tips",
             "How can I reduce my expenses?",
             "How to save more money?",
-            "What is the 50/30/20 rule for my income?",
             "How should I manage my money?",
         ],
     },
     "advice": {
         "label": "financial advice",
-        "prompt": "Here are some Advice 📚 queries:",
+        "prompt": "Here are some Advice queries:",
         "suggestions": [
             "Give me financial advice",
             "How can I save more money?",
             "How to reduce my expenses?",
-            "What is the 50/30/20 rule for my income?",
         ],
     },
     "afford": {
         "label": "purchase advice",
-        "prompt": "Here are some Purchase 🛒 advice queries:",
+        "prompt": "Here are some Purchase advice queries:",
         "suggestions": [
             "Can I afford a phone for 15000?",
             "Should I buy a laptop for 60000?",
@@ -1130,7 +1203,7 @@ KEYWORD_MENUS = {
     },
     "buy": {
         "label": "purchase advice",
-        "prompt": "Here are some Purchase 🛒 queries:",
+        "prompt": "Here are some Purchase queries:",
         "suggestions": [
             "Should I buy a laptop for 60000?",
             "Can I afford a phone for 15000?",
@@ -1140,7 +1213,7 @@ KEYWORD_MENUS = {
     },
     "balance": {
         "label": "balance",
-        "prompt": "Here are some Balance 💳 queries:",
+        "prompt": "Here are some Balance queries:",
         "suggestions": [
             "What is my current balance?",
             "How much can I spend?",
@@ -1150,7 +1223,7 @@ KEYWORD_MENUS = {
     },
     "report": {
         "label": "report / summary",
-        "prompt": "Here are some Report 📋 queries:",
+        "prompt": "Here are some Report queries:",
         "suggestions": [
             "Show my spending summary this month",
             "Compare this month vs last month",
@@ -1161,7 +1234,7 @@ KEYWORD_MENUS = {
     },
     "summary": {
         "label": "summary",
-        "prompt": "Here are some Summary 📋 queries:",
+        "prompt": "Here are some Summary queries:",
         "suggestions": [
             "Show my spending summary this month",
             "How much did I spend this month?",
@@ -1528,11 +1601,6 @@ def classify_intent(text, ctx):
             "percent", "alert", "warning", "critical",
             "over", "limit", "utiliz", "usage"]):
         return "CHECK_BUDGET"
-    if any(k in tl for k in [
-            "am i overspending", "overspending", "overspent",
-            "spending too much this month", "expenses too high",
-            "am i spending too much"]):
-        return "CHECK_BUDGET"
 
     savings_phrases = [
         "how much did i save", "how much have i saved",
@@ -1645,14 +1713,14 @@ def handle_greeting(username, balance, uid, cur):
     start      = str(today.replace(day=1))
     month_spent = _get_month_spent(uid, cur, start)
     top_cat, top_amt = _get_top_category(uid, cur, start)
-    greeting   = f"Hey {username}! 👋 I'm FinBot, your personal finance assistant.\n\n"
-    greeting  += f"💳 Balance: Rs.{balance:.2f}\n"
+    greeting   = f"Hey {username}! I'm FinBot, your personal finance assistant.\n\n"
+    greeting  += f" Balance: ₹{balance:.2f}\n"
     if month_spent > 0:
-        greeting += f"📊 Spent this month: Rs.{month_spent:.2f}\n"
+        greeting += f" Spent this month: ₹{month_spent:.2f}\n"
         if top_cat:
-            greeting += f"🏆 Top category: {top_cat} (Rs.{top_amt:.2f})\n"
+            greeting += f" Top category: {top_cat} (₹{top_amt:.2f})\n"
     greeting += (
-        "\n💡 Tip: Type a keyword to see suggested questions!\n\n"
+        "\n Tip: Type a keyword to see suggested questions!\n\n"
         "Try these keywords:\n"
         "  • budget  — budget tracking & alerts\n"
         "  • expense — spending summaries\n"
@@ -1669,6 +1737,7 @@ def handle_greeting(username, balance, uid, cur):
     return greeting
 
 
+# ── FIX: Chatbot no longer shows negative net ──────────────
 def handle_get_total_expense(text, uid, cur):
     tl = text.lower()
     if "so far" in tl or "overall" in tl or "all time" in tl:
@@ -1692,22 +1761,32 @@ def handle_get_total_expense(text, uid, cur):
         spent, earned, count = float(vals[0]), float(vals[1]), int(vals[2])
     else:
         spent, earned, count = float(row[0]), float(row[1]), int(row[2])
-    net      = earned - spent
+
     response = (
         f"Summary — {label}:\n\n"
-        f"  Total Spent:  Rs.{spent:.2f}\n"
-        f"  Total Earned: Rs.{earned:.2f}\n"
-        f"  Net:          {'+' if net >= 0 else ''}Rs.{net:.2f}\n"
+        f"  Total Spent:  ₹{spent:.2f}\n"
+        f"  Total Earned: ₹{earned:.2f}\n"
         f"  Transactions: {count}"
     )
-    if earned > 0:
+
+    if earned == 0 and spent > 0:
+        response += f"\n\n No income recorded for {label}. Add your income to track savings."
+    elif earned > 0:
         ratio = (spent / earned) * 100
-        if ratio > 90:
-            response += f"\n\n⚠️ You've spent {ratio:.0f}% of income — very little left!"
-        elif ratio > 70:
-            response += f"\n\n💡 {ratio:.0f}% of income spent. Try keeping it under 70%."
+        overspent = spent - earned
+        if overspent > 0:
+            # FIX: Instead of showing negative net, show clear overspend message
+            response += f"\n\n    You spent ₹{overspent:.2f} more than your income this period."
+            response += f"\n  That's {ratio:.0f}% of income — try to reduce expenses next month."
         else:
-            response += f"\n\n✅ Good — {ratio:.0f}% of income spent."
+            saved = earned - spent
+            response += f"\n\n  Saved: ₹{saved:.2f}  ({100 - ratio:.0f}% of income)"
+            if ratio > 90:
+                response += f"\n\n You've spent {ratio:.0f}% of income — very little left!"
+            elif ratio > 70:
+                response += f"\n\n {ratio:.0f}% of income spent. Try keeping it under 70%."
+            else:
+                response += f"\n\n Good — only {ratio:.0f}% of income spent."
     return response
 
 
@@ -1735,18 +1814,18 @@ def handle_category_expense(text, uid, cur):
     pct       = (total / total_all * 100) if total_all > 0 else 0
     response  = (
         f"{category} spending — {label}:\n\n"
-        f"  Total:         Rs.{total:.2f}\n"
+        f"  Total:         ₹{total:.2f}\n"
         f"  Transactions:  {count}\n"
         f"  % of spending: {pct:.0f}%"
     )
     if category == "Food" and total > 4000:
-        response += "\n\n💡 Food spending is high. Meal prepping can save Rs.1,000+/month."
+        response += "\n\n Food spending is high. Meal prepping can save ₹1,000+/month."
     elif category == "Transport" and total > 3000:
-        response += "\n\n💡 High transport costs. Metro or carpooling could cut this significantly."
+        response += "\n\n High transport costs. Metro or carpooling could cut this significantly."
     elif category == "Entertainment" and total > 2000:
-        response += "\n\n💡 Entertainment is significant. Look for free or discounted options."
+        response += "\n\n Entertainment is significant. Look for free or discounted options."
     elif pct > 40:
-        response += f"\n\n⚠️ {category} is {pct:.0f}% of spending — consider setting a limit."
+        response += f"\n\n {category} is {pct:.0f}% of spending — consider setting a limit."
     return response
 
 
@@ -1774,8 +1853,8 @@ def handle_check_budget(uid, cur):
     if limit is None:
         return (
             f"No budget set for this month yet.\n\n"
-            f"  Balance:     Rs.{balance:.2f}\n"
-            f"  Month spent: Rs.{month_spent:.2f}\n\n"
+            f"  Balance:     ₹{balance:.2f}\n"
+            f"  Month spent: ₹{month_spent:.2f}\n\n"
             f"Set one: 'Set my monthly budget to 10000'"
         )
 
@@ -1791,48 +1870,48 @@ def handle_check_budget(uid, cur):
 
     if pct >= 100:
         excess     = month_spent - limit
-        alert_line = f"🚨 OVER BUDGET by Rs.{excess:.0f}!"
-        emoji      = "🚨"
+        alert_line = f" OVER BUDGET by ₹{excess:.0f}!"
+        emoji      = " "
         title      = "Over Budget!"
     elif pct >= 90:
-        alert_line = "🔴 Critical — 90%+ of budget used."
-        emoji      = "🔴"
+        alert_line = " Critical — 90%+ of budget used."
+        emoji      = " "
         title      = "Critical Alert"
     elif pct >= 75:
-        alert_line = "🟡 Warning — 75%+ of budget used."
-        emoji      = "🟡"
+        alert_line = " Warning — 75%+ of budget used."
+        emoji      = " "
         title      = "Budget Warning"
     elif pct >= 50:
-        alert_line = "🔵 Notice — 50%+ of budget used."
-        emoji      = "🔵"
+        alert_line = " Notice — 50%+ of budget used."
+        emoji      = " "
         title      = "Heads Up"
     else:
-        alert_line = "✅ You're well within budget."
-        emoji      = "✅"
+        alert_line = " You're well within budget."
+        emoji      = " "
         title      = "On Track"
 
     response = (
         f"{emoji} {title}\n\n"
         f"  [{bar}]  {pct:.1f}%\n\n"
-        f"  Budget:     Rs.{limit:.2f}\n"
-        f"  Spent:      Rs.{month_spent:.2f}\n"
-        f"  Remaining:  Rs.{max(0, remaining):.2f}\n"
+        f"  Budget:     ₹{limit:.2f}\n"
+        f"  Spent:      ₹{month_spent:.2f}\n"
+        f"  Remaining:  ₹{max(0, remaining):.2f}\n"
         f"  Days left:  {days_left} days\n"
     )
     if pct < 100:
-        response += f"  Daily left: Rs.{max(0, daily_left):.2f}/day\n"
+        response += f"  Daily left: ₹{max(0, daily_left):.2f}/day\n"
     response += f"\n{alert_line}\n"
 
     if top_cat:
-        response += f"\n💡 Top category: {top_cat} (Rs.{top_amt:.0f})"
+        response += f"\n Top category: {top_cat} (₹{top_amt:.0f})"
         response += " — cut this first." if pct >= 75 else "."
 
     days_elapsed = max(1, today.day)
     if month_spent > 0:
         projected  = (month_spent / days_elapsed) * 30
-        response  += f"\n📈 Projected month-end spend: Rs.{projected:.0f}"
+        response  += f"\n Projected month-end spend: ₹{projected:.0f}"
         if projected > limit:
-            response += f" (Rs.{projected - limit:.0f} over budget at this rate)"
+            response += f" (₹{projected - limit:.0f} over budget at this rate)"
 
     return response
 
@@ -1854,13 +1933,13 @@ def handle_set_budget(text, uid, cur, conn):
             UPDATE budgets SET monthly_limit=%s
             WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
         """, (amount, uid))
-        msg = f"✅ Budget updated: Rs.{old:.0f} → Rs.{amount:.0f}/month."
+        msg = f" Budget updated: ₹{old:.0f} → ₹{amount:.0f}/month."
     else:
         cur.execute("""
             INSERT INTO budgets (user_id, monthly_limit, month, year)
             VALUES (%s, %s, MONTH(CURDATE()), YEAR(CURDATE()))
         """, (uid, amount))
-        msg = f"✅ Monthly budget set to Rs.{amount:.0f}."
+        msg = f" Monthly budget set to ₹{amount:.0f}."
 
     conn.commit()
 
@@ -1869,15 +1948,15 @@ def handle_set_budget(text, uid, cur, conn):
     month_spent = _get_month_spent(uid, cur, start)
     pct         = (month_spent / amount * 100) if amount > 0 else 0
 
-    msg += f"\n\nThis month so far: Rs.{month_spent:.2f} ({pct:.1f}% used)."
+    msg += f"\n\nThis month so far: ₹{month_spent:.2f} ({pct:.1f}% used)."
     if pct >= 90:
-        msg += "\n🔴 Critical — almost all of this budget is already used!"
+        msg += "\n Critical — almost all of this budget is already used!"
     elif pct >= 75:
-        msg += "\n🟡 Warning — 75%+ already used this month."
+        msg += "\n Warning — 75%+ already used this month."
     elif pct >= 50:
-        msg += "\n🔵 Halfway through budget already."
+        msg += "\n Halfway through budget already."
     else:
-        msg += "\n✅ You're well within your new budget."
+        msg += "\n You're well within your new budget."
     return msg
 
 
@@ -1898,7 +1977,7 @@ def handle_show_expenses(text, uid, cur):
         if isinstance(r, dict):
             sign = "+" if r['type'] == "income" else "-"
             amt  = float(r['amount'])
-            lines.append(f"  {str(r['date'])}  {r['category']:<14}  {sign}Rs.{amt:.2f}")
+            lines.append(f"  {str(r['date'])}  {r['category']:<14}  {sign}₹{amt:.2f}")
             if r['type'] == "expense":
                 total_exp += amt
             else:
@@ -1906,12 +1985,12 @@ def handle_show_expenses(text, uid, cur):
         else:
             sign = "+" if r[2] == "income" else "-"
             amt  = float(r[3])
-            lines.append(f"  {str(r[0])}  {r[1]:<14}  {sign}Rs.{amt:.2f}")
+            lines.append(f"  {str(r[0])}  {r[1]:<14}  {sign}₹{amt:.2f}")
             if r[2] == "expense":
                 total_exp += amt
             else:
                 total_inc += amt
-    lines.append(f"\n  Expenses: Rs.{total_exp:.2f}  |  Income: Rs.{total_inc:.2f}")
+    lines.append(f"\n  Expenses: ₹{total_exp:.2f}  |  Income: ₹{total_inc:.2f}")
     if len(rows) == 20:
         lines.append("  (Showing latest 20)")
     return "\n".join(lines)
@@ -1934,7 +2013,7 @@ def handle_spending_analysis(uid, cur):
         for i, r in enumerate(rows, 1):
             amt = float(r['total'])
             pct = (amt / total_all * 100) if total_all > 0 else 0
-            lines.append(f"  {i}. {r['category']:<14} Rs.{amt:>8.2f}  {pct:.0f}%  ({r['cnt']} txns)")
+            lines.append(f"  {i}. {r['category']:<14} ₹{amt:>8.2f}  {pct:.0f}%  ({r['cnt']} txns)")
         top_cat = rows[0]['category']
         top_pct = (float(rows[0]['total']) / total_all * 100) if total_all > 0 else 0
     else:
@@ -1943,14 +2022,14 @@ def handle_spending_analysis(uid, cur):
         for i, r in enumerate(rows, 1):
             amt = float(r[1])
             pct = (amt / total_all * 100) if total_all > 0 else 0
-            lines.append(f"  {i}. {r[0]:<14} Rs.{amt:>8.2f}  {pct:.0f}%  ({r[2]} txns)")
+            lines.append(f"  {i}. {r[0]:<14} ₹{amt:>8.2f}  {pct:.0f}%  ({r[2]} txns)")
         top_cat = rows[0][0]
         top_pct = (float(rows[0][1]) / total_all * 100) if total_all > 0 else 0
-    lines.append(f"\n  Total: Rs.{total_all:.2f}")
+    lines.append(f"\n  Total: ₹{total_all:.2f}")
     saving = total_all * 0.10
     lines.append(
-        f"\n💡 {top_cat} is your top spend ({top_pct:.0f}%).\n"
-        f"   Cutting all categories 10% saves Rs.{saving:.0f}/month."
+        f"\n {top_cat} is your top spend ({top_pct:.0f}%).\n"
+        f"   Cutting all categories 10% saves ₹{saving:.0f}/month."
     )
     return "\n".join(lines)
 
@@ -1984,33 +2063,44 @@ def handle_savings_info(uid, cur):
         avg_save_3m = (float(v3[0]) - float(v3[1])) / 3
     else:
         avg_save_3m = (float(r3[0]) - float(r3[1])) / 3
-    # FIX: clamp to 0 so negative avg doesn't mislead wishlist messages
     avg_save_3m = max(0.0, avg_save_3m)
 
     reply = (
         f"Savings summary:\n\n"
-        f"  Earned this month:   Rs.{earned:.2f}\n"
-        f"  Spent this month:    Rs.{spent:.2f}\n"
-        f"  Saved this month:    Rs.{saved:.2f}  ({rate:.1f}%)\n"
-        f"  Avg savings/month:   Rs.{avg_save_3m:.2f}  (3-month avg)\n"
+        f"  Earned this month:   ₹{earned:.2f}\n"
+        f"  Spent this month:    ₹{spent:.2f}\n"
     )
+
+    if saved < 0:
+        reply += f"  Overspent by:        ₹{abs(saved):.2f}  (spent ₹{abs(saved):.2f} more than income)\n"
+        reply += f"  Savings rate:        0.0%\n"
+    else:
+        reply += f"  Saved this month:    ₹{saved:.2f}  ({rate:.1f}%)\n"
+
+    reply += f"  Avg savings/month:   ₹{avg_save_3m:.2f}  (3-month avg)\n"
+
     if earned == 0:
-        reply += "\n💡 No income recorded. Add income to track savings properly."
+        reply += "\n No income recorded. Add income to track savings properly."
+    elif saved < 0:
+        top_cat, top_amt = _get_top_category(uid, cur, start_month)
+        reply += f"\n You spent ₹{abs(saved):.2f} more than your this month's income, so your savings is 0%."
+        if top_cat:
+            reply += f"\n Biggest spend: {top_cat} (₹{top_amt:.0f}). Cut here first."
     elif rate < 10:
         top_cat, top_amt = _get_top_category(uid, cur, start_month)
-        reply += f"\n⚠️ Savings rate below 10% — quite low."
+        reply += f"\n Savings rate below 10% — quite low."
         if top_cat:
-            reply += f"\n💡 Try cutting {top_cat} spending (Rs.{top_amt:.0f}) to save more."
+            reply += f"\n Try cutting {top_cat} spending (₹{top_amt:.0f}) to save more."
     elif rate >= 30:
-        reply += "\n🎯 Excellent saving rate — above 30%! Keep it up!"
+        reply += "\n Excellent saving rate — above 30%! Keep it up!"
     else:
-        reply += f"\n💡 Aim for 20-30% savings rate. You're at {rate:.1f}%."
+        reply += f"\n Aim for 20-30% savings rate. You're at {rate:.1f}%."
 
     cur.execute("SELECT COUNT(*) FROM wishlist WHERE user_id=%s", (uid,))
     wl_row   = cur.fetchone()
     wl_count = int(list(wl_row.values())[0]) if isinstance(wl_row, dict) else int(wl_row[0])
     if wl_count > 0 and avg_save_3m > 0:
-        reply += f"\n\n📋 You have {wl_count} wishlist goal(s). Ask 'Show my wishlist' for progress."
+        reply += f"\n\n You have {wl_count} wishlist goal(s). Ask 'Show my wishlist' for progress."
     return reply
 
 
@@ -2057,40 +2147,40 @@ def handle_savings_goal(text, uid, cur):
     """, (uid, start_month))
     top_cats = cur.fetchall()
 
-    still_needed        = max(0, target_amount - current_savings)
+    still_needed        = max(0, target_amount - max(0, current_savings))
     daily_spend_allowed = (income - target_amount) / days_in_month if income > 0 else 0
 
-    reply = [f"Savings Goal: Rs.{target_amount:.0f}\n"]
+    reply = [f"Savings Goal: ₹{target_amount:.0f}\n"]
 
     if income == 0:
         reply.append("No income recorded this month.")
-        reply.append(f"Add your salary first so I can check if Rs.{target_amount:.0f} is reachable.\n")
+        reply.append(f"Add your salary first so I can check if ₹{target_amount:.0f} is reachable.\n")
         if avg_monthly_savings > 0:
             if avg_monthly_savings >= target_amount:
-                reply.append(f"Based on your 3-month avg (Rs.{avg_monthly_savings:.0f}/mo) — looks achievable!")
+                reply.append(f"Based on your 3-month avg (₹{avg_monthly_savings:.0f}/mo) — looks achievable!")
             else:
                 months = target_amount / avg_monthly_savings
-                reply.append(f"Your 3-month avg savings: Rs.{avg_monthly_savings:.0f}/month.")
-                reply.append(f"At this rate, Rs.{target_amount:.0f} takes ~{months:.1f} months.")
+                reply.append(f"Your 3-month avg savings: ₹{avg_monthly_savings:.0f}/month.")
+                reply.append(f"At this rate, ₹{target_amount:.0f} takes ~{months:.1f} months.")
         return "\n".join(reply)
 
-    reply.append(f"  Income this month:   Rs.{income:.0f}")
-    reply.append(f"  Spent so far:        Rs.{spent:.0f}")
-    reply.append(f"  Saved so far:        Rs.{current_savings:.0f}")
-    reply.append(f"  Still need to save:  Rs.{still_needed:.0f}")
+    reply.append(f"  Income this month:   ₹{income:.0f}")
+    reply.append(f"  Spent so far:        ₹{spent:.0f}")
+    reply.append(f"  Saved so far:        ₹{max(0, current_savings):.0f}")
+    reply.append(f"  Still need to save:  ₹{still_needed:.0f}")
     reply.append(f"  Days remaining:      {days_left} days\n")
 
     if current_savings >= target_amount:
-        reply.append(f"✅ You've already saved Rs.{current_savings:.0f} — goal achieved this month!")
+        reply.append(f" You've already saved ₹{current_savings:.0f} — goal achieved this month!")
         return "\n".join(reply)
 
     if income < target_amount:
-        reply.append(f"⚠️ Your income (Rs.{income:.0f}) is less than the goal (Rs.{target_amount:.0f}).")
+        reply.append(f" Your income (₹{income:.0f}) is less than the goal (₹{target_amount:.0f}).")
         reply.append("Consider spreading this goal across 2-3 months.\n")
     else:
-        reply.append(f"To reach Rs.{target_amount:.0f} by month end:")
-        reply.append(f"  • Spend max Rs.{max(0, daily_spend_allowed):.0f}/day for rest of month")
-        reply.append(f"  • Save Rs.{still_needed / days_left:.0f}/day from now\n")
+        reply.append(f"To reach ₹{target_amount:.0f} by month end:")
+        reply.append(f"  • Spend max ₹{max(0, daily_spend_allowed):.0f}/day for rest of month")
+        reply.append(f"  • Save ₹{still_needed / days_left:.0f}/day from now\n")
 
     if top_cats and still_needed > 0:
         reply.append("Where you can cut:")
@@ -2099,7 +2189,7 @@ def handle_savings_goal(text, uid, cur):
                 cat, cat_amt = cat_row['category'], float(cat_row['total'])
             else:
                 cat, cat_amt = cat_row[0], float(cat_row[1])
-            reply.append(f"  • {cat} (Rs.{cat_amt:.0f}) — 20% cut saves Rs.{cat_amt * 0.2:.0f}")
+            reply.append(f"  • {cat} (₹{cat_amt:.0f}) — 20% cut saves ₹{cat_amt * 0.2:.0f}")
         total_saveable = (
             sum(float(r['total']) * 0.2 for r in top_cats)
             if isinstance(top_cats[0], dict)
@@ -2107,10 +2197,10 @@ def handle_savings_goal(text, uid, cur):
         )
         reply.append("")
         if total_saveable >= still_needed:
-            reply.append(f"Cutting 20% from top 3 categories saves Rs.{total_saveable:.0f} — enough!")
+            reply.append(f"Cutting 20% from top 3 categories saves ₹{total_saveable:.0f} — enough!")
         else:
-            reply.append(f"Cutting 20% from top categories saves Rs.{total_saveable:.0f}.")
-            reply.append(f"Still Rs.{still_needed - total_saveable:.0f} short — delay non-essentials too.")
+            reply.append(f"Cutting 20% from top categories saves ₹{total_saveable:.0f}.")
+            reply.append(f"Still ₹{still_needed - total_saveable:.0f} short — delay non-essentials too.")
 
     return "\n".join(reply)
 
@@ -2146,19 +2236,28 @@ def handle_compare(uid, cur):
 
     diff  = this_exp - last_exp
     pct   = (diff / last_exp * 100) if last_exp > 0 else 0
+
+    this_net = this_inc - this_exp
+    last_net = last_inc - last_exp
+
     reply = (
         f"Month comparison:\n\n"
         f"                This Month   Last Month\n"
         f"  {'─' * 36}\n"
-        f"  Spent:   Rs.{this_exp:>10.2f}  Rs.{last_exp:>10.2f}\n"
-        f"  Earned:  Rs.{this_inc:>10.2f}  Rs.{last_inc:>10.2f}\n"
-        f"  Net:     Rs.{this_inc - this_exp:>+10.2f}  Rs.{last_inc - last_exp:>+10.2f}\n\n"
-        f"  Change: Rs.{abs(diff):.2f} ({abs(pct):.1f}% {'more' if diff > 0 else 'less'} than last month)"
+        f"  Spent:   ₹{this_exp:>10.2f}  ₹{last_exp:>10.2f}\n"
+        f"  Earned:  ₹{this_inc:>10.2f}  ₹{last_inc:>10.2f}\n"
     )
+
+    # FIX: Show overspent instead of negative net
+    this_net_str = f"+₹{this_net:.2f}" if this_net >= 0 else f"Overspent ₹{abs(this_net):.2f}"
+    last_net_str = f"+₹{last_net:.2f}" if last_net >= 0 else f"Overspent ₹{abs(last_net):.2f}"
+    reply += f"  Net:     {this_net_str:>14}  {last_net_str:>14}\n\n"
+    reply += f"  Change: ₹{abs(diff):.2f} ({abs(pct):.1f}% {'more' if diff > 0 else 'less'} than last month)"
+
     if diff > 0:
-        reply += f"\n\n⚠️ Spending increased by Rs.{diff:.0f} this month."
+        reply += f"\n\n Spending increased by ₹{diff:.0f} this month."
     elif diff < 0:
-        reply += f"\n\n✅ Spending decreased by Rs.{abs(diff):.0f} this month. Great job!"
+        reply += f"\n\n Spending decreased by ₹{abs(diff):.0f} this month. Great job!"
     else:
         reply += "\n\nSpending is the same as last month."
     return reply
@@ -2171,7 +2270,7 @@ def handle_wishlist_status(uid, cur):
     items = cur.fetchall()
     if not items:
         return "You have no wishlist goals yet. Add one from the Wishlist section!"
-    lines = ["Your Wishlist Goals 🎯\n"]
+    lines = ["Your Wishlist Goals \n"]
     for item in items:
         if isinstance(item, dict):
             name, target, saved = item['item_name'], float(item['target_amount']), float(item['total_saved'])
@@ -2183,7 +2282,7 @@ def handle_wishlist_status(uid, cur):
         bar       = '█' * filled + '░' * (10 - filled)
         lines.append(f"  {name}")
         lines.append(f"  [{bar}] {pct:.0f}%")
-        lines.append(f"  Saved: Rs.{saved:.0f} / Rs.{target:.0f}  (Rs.{remaining:.0f} left)\n")
+        lines.append(f"  Saved: ₹{saved:.0f} / ₹{target:.0f}  (₹{remaining:.0f} left)\n")
     return "\n".join(lines)
 
 
@@ -2209,7 +2308,7 @@ def handle_wishlist_timeline(uid, cur):
     else:
         avg_save = max(0.0, (float(r[0]) - float(r[1])) / 3)
 
-    lines = ["Wishlist Timeline 📅\n"]
+    lines = ["Wishlist Timeline \n"]
     if avg_save <= 0:
         lines.append("No savings data to estimate timelines.")
         lines.append("Add income and keep expenses low to see projections.")
@@ -2222,12 +2321,12 @@ def handle_wishlist_timeline(uid, cur):
             name, target, saved = item[0], float(item[1]), float(item[2])
         remaining = max(0, target - saved)
         if remaining <= 0:
-            lines.append(f"  ✅ {name} — Goal reached!")
+            lines.append(f"   {name} — Goal reached!")
         else:
             months_needed = remaining / avg_save
-            lines.append(f"  🎯 {name}")
-            lines.append(f"     Need Rs.{remaining:.0f} more")
-            lines.append(f"     At Rs.{avg_save:.0f}/month → ~{months_needed:.1f} months")
+            lines.append(f"   {name}")
+            lines.append(f"     Need ₹{remaining:.0f} more")
+            lines.append(f"     At ₹{avg_save:.0f}/month → ~{months_needed:.1f} months")
         lines.append("")
     return "\n".join(lines)
 
@@ -2269,9 +2368,9 @@ def handle_wishlist_item_progress(text, uid, cur):
     return (
         f"Progress for {name}:\n\n"
         f"  [{bar}] {pct:.0f}%\n\n"
-        f"  Target:    Rs.{target:.0f}\n"
-        f"  Saved:     Rs.{saved:.0f}\n"
-        f"  Remaining: Rs.{remaining:.0f}\n"
+        f"  Target:    ₹{target:.0f}\n"
+        f"  Saved:     ₹{saved:.0f}\n"
+        f"  Remaining: ₹{remaining:.0f}\n"
     )
 
 
@@ -2292,21 +2391,21 @@ def handle_financial_advice(text, uid, cur):
     saved = income - spent
     rate  = (saved / income * 100) if income > 0 else 0
 
-    advice = ["💡 Financial Tips for You:\n"]
+    advice = [" Financial Tips for You:\n"]
 
     if income > 0:
         needs           = income * 0.50
         wants           = income * 0.30
         savings_target  = income * 0.20
-        advice.append(f"50/30/20 Rule for your income (Rs.{income:.0f}):")
-        advice.append(f"  • Needs (50%):   Rs.{needs:.0f}")
-        advice.append(f"  • Wants (30%):   Rs.{wants:.0f}")
-        advice.append(f"  • Savings (20%): Rs.{savings_target:.0f}\n")
+        advice.append(f"50/30/20 Rule for your income (₹{income:.0f}):")
+        advice.append(f"  • Needs (50%):   ₹{needs:.0f}")
+        advice.append(f"  • Wants (30%):   ₹{wants:.0f}")
+        advice.append(f"  • Savings (20%): ₹{savings_target:.0f}\n")
 
     top_cat, top_amt = _get_top_category(uid, cur, start)
     if top_cat:
-        advice.append(f"Your top spend is {top_cat} (Rs.{top_amt:.0f}).")
-        advice.append(f"  → A 20% cut saves Rs.{top_amt * 0.2:.0f}/month\n")
+        advice.append(f"Your top spend is {top_cat} (₹{top_amt:.0f}).")
+        advice.append(f"  → A 20% cut saves ₹{top_amt * 0.2:.0f}/month\n")
 
     advice.append("General tips:")
     advice.append("  • Track every expense — awareness reduces spending")
@@ -2315,10 +2414,12 @@ def handle_financial_advice(text, uid, cur):
     advice.append("  • Build an emergency fund of 3-6 months expenses")
     advice.append("  • Review subscriptions monthly — cancel unused ones")
 
-    if rate < 10 and income > 0:
-        advice.append(f"\n⚠️ Your savings rate is only {rate:.0f}%. Aim for at least 20%.")
+    if saved < 0:
+        advice.append(f"\n You spent ₹{abs(saved):.0f} more than your this month's income, so your savings is 0%.")
+    elif rate < 10 and income > 0:
+        advice.append(f"\n Your savings rate is only {rate:.0f}%. Aim for at least 20%.")
     elif rate >= 20:
-        advice.append(f"\n✅ Great savings rate of {rate:.0f}%! Consider investing the surplus.")
+        advice.append(f"\n Great savings rate of {rate:.0f}%! Consider investing the surplus.")
 
     return "\n".join(advice)
 
@@ -2336,26 +2437,26 @@ def handle_purchase_advice(text, uid, cur):
     month_spent = _get_month_spent(uid, cur, start)
     limit       = _get_budget_this_month(cur, uid)
 
-    lines = [f"Purchase Advice: Rs.{amount:.0f}\n"]
-    lines.append(f"  Current balance:  Rs.{balance:.2f}")
-    lines.append(f"  This month spent: Rs.{month_spent:.2f}")
+    lines = [f"Purchase Advice: ₹{amount:.0f}\n"]
+    lines.append(f"  Current balance:  ₹{balance:.2f}")
+    lines.append(f"  This month spent: ₹{month_spent:.2f}")
     if limit:
         budget_left = max(0, limit - month_spent)
-        lines.append(f"  Budget remaining: Rs.{budget_left:.2f}\n")
+        lines.append(f"  Budget remaining: ₹{budget_left:.2f}\n")
     else:
         lines.append("")
 
     after_purchase = balance - amount
     if after_purchase < 0:
-        lines.append(f"❌ Cannot afford — would leave you Rs.{abs(after_purchase):.0f} short.")
+        lines.append(f" Cannot afford — would leave you ₹{abs(after_purchase):.0f} short.")
     elif after_purchase < balance * 0.20:
-        lines.append(f"⚠️ Risky — only Rs.{after_purchase:.0f} left after purchase (under 20% of balance).")
+        lines.append(f" Risky — only ₹{after_purchase:.0f} left after purchase (under 20% of balance).")
         lines.append("   Consider waiting or saving more first.")
     elif limit and amount > (limit - month_spent):
-        lines.append(f"🟡 Affordable but exceeds remaining budget (Rs.{limit - month_spent:.0f}).")
+        lines.append(f" Affordable but exceeds remaining budget (₹{limit - month_spent:.0f}).")
         lines.append("   You may go over budget this month.")
     else:
-        lines.append(f"✅ You can afford this! Rs.{after_purchase:.0f} left after purchase.")
+        lines.append(f" You can afford this! ₹{after_purchase:.0f} left after purchase.")
 
     return "\n".join(lines)
 
@@ -2366,8 +2467,8 @@ def handle_time_based_query(text, uid, cur):
 
 def handle_edit_expense(uid, cur):
     return (
-        "To edit or delete an expense, please use the Expenses section in the app.\n\n"
-        "You can tap any transaction to edit or delete it directly."
+        "To edit or delete an expense, go to the Transactions section in the app.\n\n"
+        "Swipe left on any transaction to delete it, or tap it to edit the amount, category, or date."
     )
 
 
@@ -2379,6 +2480,19 @@ def handle_add_expense(text, uid, cur, conn):
     t_type     = extract_type(text)
     date_str, date_label = extract_date(text)
     now        = datetime.now()
+
+    # FIX: Check balance before adding expense via chatbot
+    if t_type == 'expense':
+        cur.execute("SELECT balance FROM users WHERE id=%s", (uid,))
+        bal_row = cur.fetchone()
+        current_balance = float(bal_row['balance'] if isinstance(bal_row, dict) else bal_row[0])
+        if current_balance - amount < 0:
+            return (
+                f" Cannot record this expense.\n\n"
+                f"  Expense amount:  ₹{amount:.2f}\n"
+                f"  Current balance: ₹{current_balance:.2f}\n\n"
+                f"Your balance would go negative. Please check your balance or add income first."
+            )
 
     cur.execute(
         "INSERT INTO expenses(amount, date, time, category, user_id, type, status, entry_method) "
@@ -2396,11 +2510,11 @@ def handle_add_expense(text, uid, cur, conn):
     action = "Income" if t_type == 'income' else "Expense"
     sign   = "+" if t_type == 'income' else "-"
     reply  = (
-        f"✅ {action} recorded!\n\n"
-        f"  Amount:   {sign}Rs.{amount:.2f}\n"
+        f" {action} recorded!\n\n"
+        f"  Amount:   {sign}₹{amount:.2f}\n"
         f"  Category: {category}\n"
         f"  Date:     {date_label}\n"
-        f"  Balance:  Rs.{new_balance:.2f}"
+        f"  Balance:  ₹{new_balance:.2f}"
     )
 
     if t_type == 'expense':
@@ -2411,9 +2525,9 @@ def handle_add_expense(text, uid, cur, conn):
             month_spent = _get_month_spent(uid, cur, start)
             pct         = (month_spent / limit * 100) if limit > 0 else 0
             if pct >= 90:
-                reply += f"\n\n🔴 Budget alert: {pct:.0f}% used this month!"
+                reply += f"\n\n Budget alert: {pct:.0f}% used this month!"
             elif pct >= 75:
-                reply += f"\n\n🟡 Budget warning: {pct:.0f}% used this month."
+                reply += f"\n\n Budget warning: {pct:.0f}% used this month."
 
     return reply
 
