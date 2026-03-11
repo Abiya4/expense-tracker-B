@@ -9,6 +9,7 @@ import 'insights_page.dart';
 import 'ai_page.dart';
 import 'wishlist_page.dart';
 import '../services/sms_service.dart';
+import '../services/notification_service.dart';
 import '../utils/constants.dart';
 
 class HomePage extends StatefulWidget {
@@ -66,12 +67,37 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           balance = (data['balance'] as num).toDouble();
           isLoading = false;
         });
+        
+        // Check budget every time the balance updates (e.g. on return or SMS)
+        await _checkAndShowBudgetAlert();
       }
     } catch (e) {
       setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Failed to load balance")),
       );
+    }
+  }
+
+  // ---------------- BUDGET ALERT CHECK ----------------
+  Future<void> _checkAndShowBudgetAlert() async {
+    try {
+      final response = await http.get(
+        Uri.parse("$baseUrl/budget/check_alert/${widget.userId}"), 
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final alert = data["alert"];
+        if (alert != null) {
+          NotificationService().showNotification(
+            id: 1,
+            title: "Budget Alert",
+            body: alert.toString(),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint("Alert check error: $e");
     }
   }
 

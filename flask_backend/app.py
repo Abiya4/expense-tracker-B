@@ -14,7 +14,7 @@ CORS(app)
 dbconfig = {
     "host": "localhost",
     "user": "root",
-    "password": "Abiya@2005!",
+    "password": "heeseung",
     "database": "mini_project_db"
 }
 
@@ -139,6 +139,16 @@ def run_migrations():
             print("Migration successful: 'previous_saved' column added.")
         else:
             print("Migration check: 'previous_saved' column already exists.")
+
+        # ── budgets.last_alert_sent ──────────────────────────────
+        cur.execute("SHOW COLUMNS FROM budgets LIKE 'last_alert_sent'")
+        if not cur.fetchone():
+            print("Adding 'last_alert_sent' column to budgets table...")
+            cur.execute("ALTER TABLE budgets ADD COLUMN last_alert_sent INT DEFAULT 0")
+            mysql_conn.commit()
+            print("Migration successful: 'last_alert_sent' column added.")
+        else:
+            print("Migration check: 'last_alert_sent' column already exists.")
 
     except Exception as e:
         print(f"Migration error: {e}")
@@ -528,16 +538,20 @@ def admin_analytics():
 def set_budget():
     data          = request.json
     user_id       = data['user_id']
-    monthly_limit = data['monthly_limit']
+    monthly_limit = float(data['monthly_limit'])
+    
+    if monthly_limit <= 0:
+        return jsonify({"success": False, "message": "Budget limit must be greater than 0"}), 400
+        
     cursor = get_cursor()
     cursor.execute("""
-        INSERT INTO budgets (user_id, monthly_limit, month, year)
-        VALUES (%s, %s, MONTH(CURDATE()), YEAR(CURDATE()))
-        ON DUPLICATE KEY UPDATE monthly_limit = %s
+        INSERT INTO budgets (user_id, monthly_limit, month, year, last_alert_sent)
+        VALUES (%s, %s, MONTH(CURDATE()), YEAR(CURDATE()), 0)
+        ON DUPLICATE KEY UPDATE monthly_limit = %s, last_alert_sent = 0
     """, (user_id, monthly_limit, monthly_limit))
     mysql_conn.commit()
     cursor.close()
-    return jsonify({"message": "Budget saved"})
+    return jsonify({"success": True, "message": "Budget saved"})
 
 @app.route('/budget/progress/<int:user_id>')
 def budget_progress(user_id):
@@ -567,7 +581,8 @@ def budget_progress(user_id):
 def check_alert(user_id):
     cursor = get_cursor(dictionary=True)
     cursor.execute("""
-        SELECT monthly_limit FROM budgets
+        SELECT monthly_limit, COALESCE(last_alert_sent, 0) AS last_alert_sent 
+        FROM budgets
         WHERE user_id=%s AND month=MONTH(CURDATE()) AND year=YEAR(CURDATE())
     """, (user_id,))
     budget = cursor.fetchone()
@@ -575,6 +590,7 @@ def check_alert(user_id):
         cursor.close()
         return jsonify({"alert": None})
     limit = float(budget['monthly_limit'])
+    last_alert_sent = budget['last_alert_sent']
     cursor.execute("""
         SELECT COALESCE(SUM(amount), 0) AS spent FROM expenses
         WHERE user_id=%s AND type='expense'
@@ -583,13 +599,30 @@ def check_alert(user_id):
     """, (user_id,))
     spent   = float(cursor.fetchone()['spent'])
     percent = (spent / limit) * 100 if limit > 0 else 0
-    alert   = None
+    alert = None
+    target_alert_level = 0
+    
     if percent >= 90:
+        target_alert_level = 90
         alert = "Critical: 90% of your budget used"
     elif percent >= 75:
+        target_alert_level = 75
         alert = "Warning: 75% of your budget used"
     elif percent >= 50:
+        target_alert_level = 50
         alert = "Notice: 50% of your budget used"
+        
+    # Only return the alert if we haven't already sent an alert for this level or higher this month
+    if alert and target_alert_level > last_alert_sent:
+        # Update the database to remember we sent this alert level
+        cursor.execute("""
+            UPDATE budgets SET last_alert_sent = %s 
+            WHERE user_id = %s AND month = MONTH(CURDATE()) AND year = YEAR(CURDATE())
+        """, (target_alert_level, user_id))
+        mysql_conn.commit()
+    else:
+        alert = None
+
     cursor.close()
     return jsonify({"percent": percent, "alert": alert})
 
@@ -716,6 +749,14 @@ def get_balances(user_id):
         SELECT COALESCE(SUM(total_saved), 0) AS saved FROM wishlist WHERE user_id=%s
     """, (user_id,))
     saved     = float(cur.fetchone()["saved"])
+    if saved > balance:
+        cur.execute("""
+            UPDATE wishlist SET previous_saved = total_saved, total_saved = 0
+            WHERE user_id=%s AND total_saved > 0
+        """, (user_id,))
+        mysql_conn.commit()
+        saved = 0.0
+
     spendable = balance - saved
     cur.close()
     return jsonify({"actual_balance": balance, "saved_amount": saved, "spendable_balance": spendable})

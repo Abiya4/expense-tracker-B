@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../utils/constants.dart';
+import '../services/notification_service.dart';
 
 class WishlistPage extends StatefulWidget {
   final int userId;
@@ -92,6 +93,33 @@ class _WishlistPageState extends State<WishlistPage> {
   Future<void> addWishlistItem() async {
     if (itemController.text.isEmpty || amountController.text.isEmpty) return;
 
+    if (wishlist.length >= 7) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF161D32),
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.redAccent),
+              SizedBox(width: 8),
+              Text("Limit Reached", style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          content: const Text(
+            "You can only have up to 7 wishlist items at a time. Please delete an item before adding a new one.",
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("OK", style: TextStyle(color: Color(0xFF2FE6D1))),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     try {
       final response = await http.post(
         Uri.parse("$baseUrl/wishlist"), // fixed: was /wishlist/add
@@ -161,6 +189,12 @@ class _WishlistPageState extends State<WishlistPage> {
 
   Future<void> setBudget() async {
     if (budgetController.text.isEmpty) return;
+    
+    final double? parsedLimit = double.tryParse(budgetController.text);
+    if (parsedLimit == null || parsedLimit <= 0) {
+      _showSnack("Budget limit must be greater than 0", isError: true);
+      return;
+    }
 
     try {
       await http.post(
@@ -168,7 +202,7 @@ class _WishlistPageState extends State<WishlistPage> {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "user_id": widget.userId,
-          "monthly_limit": double.parse(budgetController.text),
+          "monthly_limit": parsedLimit,
         }),
       );
 
@@ -189,9 +223,11 @@ class _WishlistPageState extends State<WishlistPage> {
         final data = jsonDecode(response.body);
         final alert = data["alert"];
         if (alert != null && mounted) {
-          final isError = alert.toString().contains("Critical") ||
-              alert.toString().contains("Warning");
-          _showSnack(alert, isError: isError);
+          NotificationService().showNotification(
+            id: 1,
+            title: "Budget Alert",
+            body: alert.toString(),
+          );
         }
       }
     } catch (e) {
@@ -627,7 +663,7 @@ class _WishlistPageState extends State<WishlistPage> {
               children: [
                 if (previousSaved > 0) ...[
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     margin: const EdgeInsets.only(bottom: 12),
                     decoration: BoxDecoration(
                       color: Colors.redAccent.withOpacity(0.1),
@@ -636,17 +672,16 @@ class _WishlistPageState extends State<WishlistPage> {
                           Border.all(color: Colors.redAccent.withOpacity(0.3)),
                     ),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         const Icon(Icons.warning_amber_rounded,
-                            color: Colors.redAccent, size: 20),
+                            color: Colors.redAccent, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             "You lost ₹${previousSaved.toStringAsFixed(0)} due to low balance.",
                             style: const TextStyle(
-                                color: Colors.redAccent, fontSize: 13),
+                                color: Colors.redAccent, fontSize: 12),
                           ),
                         ),
                         TextButton(
@@ -675,12 +710,17 @@ class _WishlistPageState extends State<WishlistPage> {
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
-                            fontWeight: FontWeight.w500),
+                            fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (completed)
-                      const Icon(Icons.check_circle,
-                          color: Colors.green, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      "${(progress * 100).toStringAsFixed(0)}%",
+                      style: TextStyle(color: barColor, fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 4),
                     IconButton(
                       icon: const Icon(Icons.delete_outline,
                           color: Colors.white54, size: 20),
@@ -690,52 +730,53 @@ class _WishlistPageState extends State<WishlistPage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 LinearProgressIndicator(
                   value: progress,
                   backgroundColor: Colors.white12,
                   color: barColor,
-                  minHeight: 8,
+                  minHeight: 6,
+                  borderRadius: BorderRadius.circular(3),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 10),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      "₹${saved.toStringAsFixed(2)} / ₹${target.toStringAsFixed(2)}",
-                      style: const TextStyle(color: Colors.white54),
+                      "₹${saved.toStringAsFixed(0)} / ₹${target.toStringAsFixed(0)}",
+                      style: const TextStyle(color: Colors.white54, fontSize: 13),
                     ),
-                    Text(
-                      "${(progress * 100).toStringAsFixed(0)}%",
-                      style: TextStyle(color: barColor, fontSize: 12),
-                    ),
+                    if (completed)
+                      Row(
+                        children: const [
+                          Icon(Icons.check_circle, color: Colors.green, size: 16),
+                          SizedBox(width: 4),
+                          Text(
+                            "Goal Completed!",
+                            style: TextStyle(
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13),
+                          ),
+                        ],
+                      )
+                    else
+                      SizedBox(
+                        height: 32,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white.withOpacity(0.08),
+                            foregroundColor: const Color(0xFF2FE6D1),
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onPressed: () => showSaveDialog(item["id"]),
+                          child: const Text("+ Save", style: TextStyle(fontSize: 13)),
+                        ),
+                      ),
                   ],
                 ),
-                if (completed)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      "✔ Goal Completed!",
-                      style: TextStyle(
-                          color: Colors.green, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                if (!completed) ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white.withOpacity(0.08),
-                        foregroundColor: const Color(0xFF2FE6D1),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                      ),
-                      onPressed: () => showSaveDialog(item["id"]),
-                      child: const Text("+ Save Money"),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
